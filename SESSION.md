@@ -131,6 +131,23 @@ systemctl/pm2/docker/nginx/certbot, dan tidak boleh membuka port tanpa izin.
 Semua langkahnya sudah ditulis di docs/deploy.md untuk dijalankan operator.
 Port yang diusulkan: 3060 (perlu dicek belum dipakai app lain).
 
+## 2026-09-15 — Sesi 4: favicon
+
+- favicon.ico bawaan Next.js diganti dengan ikon Aqma: huruf Q dari logo
+  (lingkaran + ekor bergelombang) di atas latar navy. Wordmark utuh tidak
+  dipakai karena tidak terbaca di 16px. Dicek keterbacaannya di 16/32/48/64px.
+- Dibuat juga icon-192.png, icon-512.png, apple-icon.png.
+  Catatan: public/sw.js sudah merujuk icon-192.png sejak repo Taiba tapi
+  filenya tidak pernah ada — notifikasi push selama ini tanpa ikon. Sekarang ada.
+- Kendala yang sempat muncul: Turbopack menolak ICO yang isinya PNG non-RGBA.
+  Solusinya convert("RGBA") sebelum save. Sudah dicatat di scripts/make-favicon.py.
+- Build ulang: lolos. Commit 3c735fe sudah di-push.
+
+TEMUAN: muncul file .secrets/deploy-credentials.txt di folder project
+(dibuat 15 Sep 10:40, bukan oleh saya) berisi password login owner & CS
+dalam bentuk plaintext. File itu TIDAK ikut di-commit — saya unstage lalu
+tambahkan /.secrets ke .gitignore. Filenya tetap ada di disk, tidak saya hapus.
+
 MASIH PERLU DIKONFIRMASI OPERATOR:
 - Daftar treatment & struktur harga Aqma yang sebenarnya (pemetaan paket sesi
   1x/3x/6x/12x saat ini ASUMSI saya, bukan data asli).
