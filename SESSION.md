@@ -85,6 +85,60 @@ Langkah berikutnya: menunggu instruksi lanjutan operator.
 Catatan: PAT GitHub yang dikirim operator sebaiknya di-rotate setelah selesai,
 karena sudah beredar di chat.
 
+## 2026-09-15 — Sesi 3: adaptasi kode + push ke repo Aqma
+
+Instruksi operator: clone CRM Taiba, modifikasi untuk Aqma Clinic, deploy di
+server ini dengan domain crm.klinikaqma.com, lalu commit & push ke
+github.com/akunmastahdigital/crm-aqma-clinic.
+
+SELESAI:
+1. Kode Taiba disalin ke root project (tanpa .git), reference/ di-gitignore.
+2. Rebrand mekanis: semua "Taiba"/"ODAC"/domain lama diganti Aqma +
+   crm.klinikaqma.com.
+3. Tema: globals.css ditulis ulang dengan palet Aqma (navy #2F4157 primary,
+   sage #A1A692 accent). Sidebar jadi navy. Font display Cormorant Garamond
+   ditambah untuk judul. Logo dipasang di favicon, sidebar, header mobile.
+   Halaman login didesain ulang (latar navy + motif lengkung ekor huruf Q).
+4. Domain umrah -> klinik:
+   - roomType -> sessionPack ("1x"/"3x"/"6x"/"12x")
+   - potentialQuad/Triple/Double/Infant -> potentialQty1x/3x/6x/12x
+   - "jamaah" -> "paket"/"pasien", "tipe kamar" -> "ukuran paket"
+   - menu: Pelanggan -> Pasien & Lead, Paket -> Paket Treatment
+   - prompt AI evaluasi & profil audience ditulis ulang untuk klinik,
+     dengan larangan memberi diagnosa/saran medis
+   - stage default: Lead Baru, Dihubungi, Konsultasi, Booking Jadwal,
+     Datang & Treatment, Batal
+5. Keamanan/kebersihan: prisma/waba-setup.mjs DIHAPUS (berisi WABA ID & nomor
+   WhatsApp milik klien lain, Klinik Gigi Odac Family). Seed demo ditulis ulang
+   dengan data fiktif klinik. Password seed tidak lagi hardcoded.
+   File QA/backup sisa repo asal dihapus.
+6. Dua bug bawaan Taiba diperbaiki:
+   - push.ts memanggil setVapidDetails saat import -> build GAGAL total kalau
+     env VAPID kosong. Dibuat lazy.
+   - customer-panel memanggil setPkgRoomType yang tidak pernah dideklarasikan
+     (lolos karena ignoreBuildErrors) -> diganti resetPkgQty.
+7. npm install + prisma generate + npm run build: LOLOS.
+   Sisa 11 error TypeScript, semuanya bawaan dari repo Taiba (repo asal memang
+   jalan dengan typescript.ignoreBuildErrors = true). Belum diperbaiki.
+8. git init, commit, push ke origin/main. Repo remote SEBELUMNYA KOSONG
+   (dicek dengan git ls-remote, tidak ada branch) jadi tidak ada yang tertimpa.
+   Token dilepas dari remote setelah push.
+9. docs/deploy.md ditulis: langkah deploy lengkap untuk operator.
+
+BELUM SELESAI — DEPLOY. Diblokir aturan channel, bukan karena gagal:
+asisten tidak boleh membuat/menyentuh database apa pun, tidak boleh
+systemctl/pm2/docker/nginx/certbot, dan tidak boleh membuka port tanpa izin.
+Semua langkahnya sudah ditulis di docs/deploy.md untuk dijalankan operator.
+Port yang diusulkan: 3060 (perlu dicek belum dipakai app lain).
+
+MASIH PERLU DIKONFIRMASI OPERATOR:
+- Daftar treatment & struktur harga Aqma yang sebenarnya (pemetaan paket sesi
+  1x/3x/6x/12x saat ini ASUMSI saya, bukan data asli).
+- Siapa saja user CRM ini dan perannya; berapa cabang.
+- Sumber lead (WA? IG? iklan Meta? walk-in?).
+- Apakah butuh modul jadwal/appointment & kapasitas dokter/terapis — modul ini
+  BELUM ADA, dan itu kebutuhan inti klinik yang tidak dipunyai CRM travel.
+
 ---
 
 Aturan kerja channel ini:
