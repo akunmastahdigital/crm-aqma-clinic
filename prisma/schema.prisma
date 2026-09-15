@@ -1,0 +1,872 @@
+// CRM omnichannel — schema
+// Tahap A: user & role. Tahap B: customer, conversation, message.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  OWNER
+  SUPERADMIN
+  SUPERVISOR
+  AGENT
+  GUEST
+  VIEWER
+}
+
+enum Channel {
+  SIMULATOR
+  WA_QR
+  WA_CLOUD
+  INSTAGRAM
+  MESSENGER
+}
+
+enum ConvStatus {
+  OPEN
+  PENDING
+  CLOSED
+}
+
+enum Direction {
+  IN
+  OUT
+}
+
+enum MsgStatus {
+  SENT
+  DELIVERED
+  READ
+  FAILED
+}
+
+model User {
+  id           String    @id @default(cuid())
+  name         String
+  email        String    @unique
+  passwordHash String
+  role         Role      @default(AGENT)
+  active       Boolean   @default(true)
+  avatarUrl    String?
+  telegramId   String?
+  lastLoginAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  assignedCustomers     Customer[]           @relation("CustomerAssignee")
+  assignedConversations Conversation[]       @relation("ConvAssignee")
+  sentMessages          Message[]            @relation("MsgAuthor")
+  deals                 Deal[]               @relation("DealAssignee")
+  followUps             FollowUp[]           @relation("FollowUpAssignee")
+  salesJournals         SalesJournal[]       @relation("JournalAuthor")
+  conversationAgents    ConversationAgent[]
+  pushSubscriptions     PushSubscription[]
+  agentTarget           AgentTarget?
+
+  @@map("users")
+}
+
+model AgentTarget {
+  id            String @id @default(cuid())
+  userId        String @unique
+  user          User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  fuDaily       Int    @default(10)
+  closingDaily  Int    @default(5)
+  activityDaily Int    @default(10)
+  newLeadDaily  Int    @default(5)
+  updatedAt     DateTime @updatedAt @default(now())
+
+  @@map("agent_targets")
+}
+
+model Customer {
+  id              String    @id @default(cuid())
+  channel         Channel   @default(SIMULATOR)
+  externalId      String // nomor WA / user id IG dll
+  name            String?
+  phone           String?
+  consent         Boolean   @default(true)
+  windowExpiresAt DateTime? // batas 24 jam bisa balas bebas
+  lastContactAt   DateTime?
+  score           Int       @default(0)
+  tags            String[]  @default([])
+  note            String?
+  email           String?
+  source          String? // asal lead (mis. "konektor")
+  konektorId      String?   @unique // id lead di Konektor (buat sinkron)
+  leadStatus      String? // status lead dari Konektor
+  priority        String?
+  assignedToId    String?
+  assignedTo      User?     @relation("CustomerAssignee", fields: [assignedToId], references: [id])
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  metaEventStatus    String?
+  closedAt           DateTime? // waktu closing pertama kali terpenuhi
+  timeToCloseMinutes Int?      // durasi dari chat pertama ke closing (menit)
+
+  // Potensi closing
+  packageTypeId    String?
+  packageType      PackageType?    @relation(fields: [packageTypeId], references: [id], onDelete: SetNull)
+  packageVariantId String?
+  packageVariant   PackageVariant? @relation(fields: [packageVariantId], references: [id], onDelete: SetNull)
+  packageMonth     Int?            // 1-12
+  packageYear      Int?
+  potentialQty1x    Int?            // jumlah paket sesi 1x yang diminati
+  potentialQty3x    Int?            // jumlah paket sesi 3x yang diminati
+  potentialQty6x    Int?            // jumlah paket sesi 6x yang diminati
+  potentialQty12x   Int?            // jumlah paket sesi 12x yang diminati
+  potentialValue   Int?            // Rupiah (auto-calculated)
+
+  conversations    Conversation[]
+  deals            Deal[]
+  followUps        FollowUp[]
+  salesJournals    SalesJournal[]
+  clickSessions    ClickSession[]
+  capiEvents       CapiEvent[]
+  leadTagItems     LeadTagItem[]
+  audienceProfiles AudienceProfile[]
+
+  @@unique([channel, externalId])
+  @@index([lastContactAt])
+  @@index([packageTypeId, packageMonth, packageYear])
+  @@map("customers")
+}
+
+model AudienceProfile {
+  id         String   @id @default(cuid())
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  content    Json
+  createdAt  DateTime @default(now())
+
+  @@index([customerId, createdAt])
+  @@map("audience_profiles")
+}
+
+model PackageType {
+  id        String           @id @default(cuid())
+  name      String
+  order     Int              @default(0)
+  createdAt DateTime         @default(now())
+  variants  PackageVariant[]
+  customers Customer[]
+
+  @@map("package_types")
+}
+
+model PackageVariant {
+  id            String         @id @default(cuid())
+  packageTypeId String
+  packageType   PackageType    @relation(fields: [packageTypeId], references: [id], onDelete: Cascade)
+  name          String         // nama paket treatment, mis. "Facial Acne", "Laser CO2"
+  order         Int            @default(0)
+  prices        PackagePrice[]
+  customers     Customer[]
+
+  @@map("package_variants")
+}
+
+model PackagePrice {
+  id               String         @id @default(cuid())
+  packageVariantId String
+  packageVariant   PackageVariant @relation(fields: [packageVariantId], references: [id], onDelete: Cascade)
+  sessionPack         String         // "1x" | "3x" | "6x" | "12x"
+  price            Int            // Rupiah
+
+  @@unique([packageVariantId, sessionPack])
+  @@map("package_prices")
+}
+
+model Conversation {
+  id              String     @id @default(cuid())
+  customerId      String
+  customer        Customer   @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  channel         Channel    @default(SIMULATOR)
+  status          ConvStatus @default(OPEN)
+  unread          Int        @default(0)
+  aiPaused        Boolean    @default(false) // true = ditangani manusia (AI/auto berhenti)
+  aiDraft         String?    // draft balasan AI, pre-fill textarea agen (belum terkirim)
+  aiTyping        Boolean    @default(false) // true = AI sedang generate balasan
+  aiTypingAt      DateTime?  // kapan AI mulai typing (untuk timeout 30 detik di client)
+  channelAccountId String? // WA_CLOUD: phone_number_id nomor kita yang dipakai
+  lastMessageAt   DateTime?
+  lastMessageText String?
+  assignedToId    String?
+  assignedTo      User?      @relation("ConvAssignee", fields: [assignedToId], references: [id])
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  metaSubType            String?                     // "DM" | "COMMENT" — hanya untuk INSTAGRAM & MESSENGER
+  needsFollowUp          Boolean   @default(false)   // set true saat auto-reply luar jam, clear saat agent manual reply
+  outsideHoursRepliedAt  DateTime?                   // kapan terakhir auto-reply luar jam dikirim (untuk de-dup harian)
+  firstResponseAt        DateTime?                   // waktu agent pertama kali manual reply
+  firstResponseMinutes   Int?                        // FRT dalam menit (business hours)
+
+  messages           Message[]
+  conversationAgents ConversationAgent[]
+
+  @@index([lastMessageAt])
+  @@index([status])
+  @@index([needsFollowUp])
+  @@map("conversations")
+}
+
+model ConversationAgent {
+  id             String    @id @default(cuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  agentId        String
+  agent          User      @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  role           String    @default("PENDING") // PRIMARY | SECONDARY | PENDING
+  joinedAt       DateTime  @default(now())     // waktu agent pertama kirim pesan
+  qualifiedAt    DateTime?                      // waktu syarat secondary terpenuhi
+  createdAt      DateTime  @default(now())
+
+  @@unique([conversationId, agentId])
+  @@index([conversationId])
+  @@map("conversation_agents")
+}
+
+model Message {
+  id             String       @id @default(cuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  direction      Direction
+  text           String?
+  mediaUrl       String?
+  mediaType      String?
+  status         MsgStatus    @default(SENT)
+  externalId     String?
+  authorId       String?
+  author         User?        @relation("MsgAuthor", fields: [authorId], references: [id])
+  replyToId      String? // pesan yang dibalas (kutipan bubble)
+  replyTo        Message?     @relation("MsgReply", fields: [replyToId], references: [id], onDelete: SetNull)
+  replies        Message[]    @relation("MsgReply")
+  createdAt      DateTime     @default(now())
+
+  @@index([conversationId, createdAt])
+  @@index([externalId])
+  @@map("messages")
+}
+
+model Pipeline {
+  id        String   @id @default(cuid())
+  name      String
+  isDefault Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  stages Stage[]
+  deals  Deal[]
+
+  @@map("pipelines")
+}
+
+model Stage {
+  id         String   @id @default(cuid())
+  pipelineId String
+  pipeline   Pipeline @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
+  name       String
+  order      Int      @default(0)
+  color      String?
+
+  deals         Deal[]
+  salesJournals SalesJournal[]
+
+  @@index([pipelineId, order])
+  @@map("stages")
+}
+
+model Deal {
+  id           String    @id @default(cuid())
+  pipelineId   String
+  pipeline     Pipeline  @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
+  stageId      String
+  stage        Stage     @relation(fields: [stageId], references: [id], onDelete: Cascade)
+  customerId   String?
+  customer     Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  title        String
+  value        Int? // nilai deal (Rupiah)
+  note         String?
+  assignedToId String?
+  assignedTo   User?     @relation("DealAssignee", fields: [assignedToId], references: [id])
+  order        Int       @default(0)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([stageId, order])
+  @@map("deals")
+}
+
+enum FieldType {
+  TEXT
+  NUMBER
+  SELECT
+  DATE
+}
+
+model CustomField {
+  id        String    @id @default(cuid())
+  label     String
+  key       String    @unique
+  type      FieldType @default(TEXT)
+  options   String[]  @default([])
+  order     Int       @default(0)
+  createdAt DateTime  @default(now())
+
+  @@map("custom_fields")
+}
+
+model QuickReply {
+  id          String   @id @default(cuid())
+  shortcut    String   @unique // mis. /closing
+  category    String? // pengelompokan
+  title       String?
+  text        String?
+  attachments Json? // array {url, type, name}
+  order       Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  @@map("quick_replies")
+}
+
+enum FollowUpStatus {
+  PENDING
+  DONE
+}
+
+model FollowUp {
+  id             String         @id @default(cuid())
+  customerId     String
+  customer       Customer       @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  conversationId String?
+  scheduledAt    DateTime
+  note           String?
+  status         FollowUpStatus @default(PENDING)
+  assignedToId   String?
+  assignedTo     User?          @relation("FollowUpAssignee", fields: [assignedToId], references: [id])
+  createdAt      DateTime       @default(now())
+  doneAt         DateTime?
+
+  @@index([status, scheduledAt])
+  @@map("follow_ups")
+}
+
+enum AutoReplyTrigger {
+  KEYWORD
+  FIRST_MESSAGE
+}
+
+model AutoReply {
+  id          String           @id @default(cuid())
+  name        String
+  trigger     AutoReplyTrigger @default(KEYWORD)
+  keywords    String[]         @default([])
+  replyText   String?
+  attachments Json?
+  active      Boolean          @default(true)
+  order       Int              @default(0)
+  createdAt   DateTime         @default(now())
+
+  @@map("auto_replies")
+}
+
+model AutoTag {
+  id        String   @id @default(cuid())
+  keywords  String[] @default([])
+  tag       String
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  @@map("auto_tags")
+}
+
+model AiSettings {
+  id           String   @id @default("singleton")
+  enabled      Boolean  @default(false)
+  provider     String   @default("byok") // byok | platform
+  apiBaseUrl   String?
+  apiKey       String?
+  model        String   @default("gpt-4o-mini")
+  temperature  Float    @default(0.7)
+  systemPrompt String?
+  wordFilter   String[] @default([])
+
+  // Jam Kerja
+  workHoursEnabled Boolean @default(false)
+  workTimezone     String  @default("Asia/Jakarta")
+  workDays         Json? // [{open,start,end} x7], index 0=Minggu
+  outsideMessage   String?
+
+  // Eskalasi ke manusia
+  escalationKeywords String[] @default([])
+  escalationMessage  String?
+
+  // AI aktif 24 jam — abaikan jam kerja, pesan "kami tutup" tidak jalan
+  alwaysActive Boolean @default(false)
+
+  // Draft mode — AI buat draft, agen approve sebelum kirim
+  draftMode Boolean @default(false)
+
+  // Aturan perilaku AI
+  alwaysRules String[] @default([])
+  neverRules  String[] @default([])
+
+  // Saran jawaban untuk agent (mode human)
+  suggestEnabled      Boolean @default(true)
+  suggestSystemPrompt String?
+
+  // CLI Bridge — koneksi tanpa API key berbayar
+  bridgeEnabled      Boolean @default(false)
+  bridgeProvider     String  @default("chatgpt") // chatgpt | claude | gemini | deepseek
+  bridgeChatGptToken String? // __Secure-next-auth.session-token dari browser DevTools
+  bridgeGeminiKey    String? // Gemini free tier API key
+  bridgeDeepseekKey  String? // Deepseek API key (murah)
+
+  updatedAt DateTime @updatedAt @default(now())
+
+  @@map("ai_settings")
+}
+
+model KnowledgeBase {
+  id        String   @id @default(cuid())
+  title     String
+  content   String
+  createdAt DateTime @default(now())
+
+  @@map("knowledge_base")
+}
+
+model QaPair {
+  id        String   @id @default(cuid())
+  question  String
+  answer    String
+  createdAt DateTime @default(now())
+
+  @@map("qa_pairs")
+}
+
+model WabaChannel {
+  id            String   @id @default(cuid())
+  label         String
+  wabaId        String
+  phoneNumberId String   @unique
+  displayPhone  String?
+  accessToken   String
+  active        Boolean  @default(true)
+  createdAt     DateTime @default(now())
+
+  trackingLinks TrackingLink[]
+
+  @@map("waba_channels")
+}
+
+model WaQrChannel {
+  id        String   @id @default(cuid())
+  label     String
+  port      Int      @unique
+  authDir   String   @unique
+  pm2Name   String   @unique
+  phone     String?
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  @@map("wa_qr_channels")
+}
+
+model Template {
+  id         String   @id @default(cuid())
+  wabaId     String
+  metaId     String?
+  name       String
+  language   String   @default("id")
+  category   String?
+  status     String?
+  bodyText   String?
+  components Json?
+  createdAt  DateTime @default(now())
+
+  @@unique([wabaId, name, language])
+  @@map("templates")
+}
+
+model BroadcastJob {
+  id               String    @id @default(cuid())
+  templateName     String
+  templateLang     String    @default("id")
+  channelAccountId String // phone_number_id nomor pengirim
+  total            Int       @default(0)
+  sent             Int       @default(0)
+  failed           Int       @default(0)
+  status           String    @default("running") // running | done | failed
+  createdById      String?
+  createdAt        DateTime  @default(now())
+  finishedAt       DateTime?
+
+  recipients BroadcastRecipient[]
+
+  @@map("broadcast_jobs")
+}
+
+model BroadcastRecipient {
+  id         String       @id @default(cuid())
+  jobId      String
+  job        BroadcastJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  customerId String?
+  to         String
+  status     String       @default("pending") // pending | sent | failed
+  error      String?
+
+  @@index([jobId])
+  @@map("broadcast_recipients")
+}
+
+model MediaFolder {
+  id        String   @id @default(cuid())
+  name      String
+  createdAt DateTime @default(now())
+  media     Media[]
+
+  @@map("media_folders")
+}
+
+model Media {
+  id          String       @id @default(cuid())
+  url         String
+  name        String
+  type        String // image | video | audio | document
+  size        Int          @default(0)
+  createdById String?
+  folderId    String?
+  folder      MediaFolder? @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  createdAt   DateTime     @default(now())
+
+  @@index([folderId])
+  @@map("media")
+}
+
+model ApiKey {
+  id         String    @id @default(cuid())
+  name       String
+  prefix     String
+  keyHash    String    @unique
+  active     Boolean   @default(true)
+  lastUsedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@map("api_keys")
+}
+
+model WebhookEndpoint {
+  id        String   @id @default(cuid())
+  url       String
+  events    String[] @default([])
+  secret    String?
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  @@map("webhook_endpoints")
+}
+
+// Pelanggan notifikasi Telegram (subscribe via /start ke bot).
+model NotifySubscriber {
+  id        String   @id @default(cuid())
+  chatId    String   @unique
+  name      String?
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  @@map("notify_subscribers")
+}
+
+// === JURNAL SALES ===
+
+enum JournalStatus {
+  PENDING
+  DONE
+  RESCHEDULE
+}
+
+model CrmSetting {
+  key       String   @id
+  value     String   // JSON serialized
+  updatedAt DateTime @updatedAt @default(now())
+
+  @@map("crm_settings")
+}
+
+model MetaChannel {
+  id              String   @id @default(cuid())
+  type            Channel  // INSTAGRAM or MESSENGER
+  pageId          String
+  pageAccessToken String
+  igAccountId     String?  // Instagram Business Account ID (only for INSTAGRAM)
+  label           String
+  active          Boolean  @default(true)
+  createdAt       DateTime @default(now())
+
+  @@map("meta_channels")
+}
+
+model SalesJournal {
+  id               String        @id @default(cuid())
+  customerId       String
+  customer         Customer      @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  userId           String
+  user             User          @relation("JournalAuthor", fields: [userId], references: [id])
+  date             DateTime      @db.Date
+  activityType     String
+  followUpType     String?
+  followUpResponse String?
+  label            String?
+  stageId          String?
+  stage            Stage?        @relation(fields: [stageId], references: [id], onDelete: SetNull)
+  isClosingFail    Boolean       @default(false)
+  cancelReason     String?
+  notes            String?
+  nextAction       String?
+  scheduledAt      DateTime?
+  status           JournalStatus @default(PENDING)
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  @@index([customerId])
+  @@index([userId])
+  @@index([date])
+  @@index([status, scheduledAt])
+  @@map("sales_journals")
+}
+
+model TrackingLink {
+  id               String         @id @default(cuid())
+  slug             String         @unique
+  name             String
+  greetingTemplate String
+  codePosition     String         @default("after") // "before" | "after"
+  channelId        String?
+  channel          WabaChannel?   @relation(fields: [channelId], references: [id], onDelete: SetNull)
+  isActive         Boolean        @default(true)
+  pageViewEvent    String?        // CAPI event saat LP dibuka
+  clickEvent       String?        // CAPI event saat link diklik
+  clickSessions    ClickSession[]
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  @@map("tracking_links")
+}
+
+model TrackingDomain {
+  id        String   @id @default(cuid())
+  domain    String   @unique // e.g. https://chat.odac-corp.com
+  label     String?
+  createdAt DateTime @default(now())
+
+  @@map("tracking_domains")
+}
+
+model ClickSession {
+  id             String        @id @default(cuid())
+  linkId         String
+  link           TrackingLink  @relation(fields: [linkId], references: [id], onDelete: Cascade)
+  code           String        @unique // O-XXXX
+  fbclid         String?
+  fbp            String?
+  utmSource      String?
+  utmMedium      String?
+  utmCampaign    String?
+  utmTerm        String?
+  utmContent     String?
+  campaignId     String?
+  adsetId        String?
+  adId           String?
+  campaignName   String?
+  adsetName      String?
+  adName         String?
+  placement      String?
+  siteSourceName String?
+  adAccountId    String?
+  ip             String?
+  userAgent      String?
+  referer        String?
+  customerId     String?
+  customer       Customer?     @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  matchedAt      DateTime?
+  createdAt      DateTime      @default(now())
+
+  @@index([linkId])
+  @@index([code])
+  @@index([customerId])
+  @@map("click_sessions")
+}
+
+model LpEvent {
+  id             String   @id @default(cuid())
+  event          String
+  pageUrl        String?
+  sessionId      String?
+  fbclid         String?
+  utmSource      String?
+  utmMedium      String?
+  utmCampaign    String?
+  utmTerm        String?
+  utmContent     String?
+  campaignId     String?
+  adsetId        String?
+  adId           String?
+  campaignName   String?
+  adsetName      String?
+  adName         String?
+  placement      String?
+  siteSourceName String?
+  adAccountId    String?
+  ip             String?
+  userAgent      String?
+  createdAt      DateTime @default(now())
+
+  @@index([sessionId])
+  @@index([fbclid])
+  @@index([createdAt])
+  @@map("lp_events")
+}
+
+model CapiEvent {
+  id          String    @id @default(cuid())
+  eventName   String
+  customerId  String?
+  customer    Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  fbclid      String?
+  campaignId  String?
+  adsetId     String?
+  adId        String?
+  value       Float?
+  currency    String?
+  phone       String?
+  email       String?
+  eventId     String?
+  pixelId     String?
+  status      String    @default("sent")
+  response    String?
+  sentAt      DateTime  @default(now())
+
+  @@index([customerId])
+  @@index([eventName])
+  @@index([sentAt])
+  @@map("capi_events")
+}
+
+model CrmRule {
+  id          String    @id @default(cuid())
+  name        String
+  isActive    Boolean   @default(true)
+  trigger     String    @default("message_in")
+  conditions  Json
+  actions     Json
+  runCount    Int       @default(0)
+  lastRunAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@map("crm_rules")
+}
+
+model ConversationResume {
+  id           String   @id @default(cuid())
+  channelId    String?  // null = semua channel; isi = phoneNumberId channel
+  period       String   // "today" | "7d" | "30d"
+  totalConvs   Int      @default(0)
+  generatedAt  DateTime @default(now())
+  result       Json
+
+  @@index([channelId, period])
+  @@map("conversation_resumes")
+}
+
+model LeadTag {
+  id        String        @id @default(cuid())
+  name      String
+  color     String        @default("#6366f1")
+  createdAt DateTime      @default(now())
+  items     LeadTagItem[]
+
+  @@map("lead_tags")
+}
+
+model LeadTagItem {
+  id         String   @id @default(cuid())
+  tagId      String
+  tag        LeadTag  @relation(fields: [tagId], references: [id], onDelete: Cascade)
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+
+  @@unique([tagId, customerId])
+  @@index([tagId])
+  @@index([customerId])
+  @@index([createdAt])
+  @@map("lead_tag_items")
+}
+
+model AppSettings {
+  id                    String   @id @default("singleton")
+  secondaryMinIncoming  Int      @default(5)
+  secondaryMinReplies   Int      @default(5)
+
+  // Notifikasi overdue
+  overdueThresholdMinutes Int      @default(3)
+  overdueExcludeTags      String[] @default(["Drop"])
+  overdueExcludeFailClose Boolean  @default(true)
+
+  @@map("app_settings")
+}
+
+model EvaluationHistory {
+  id         String   @id @default(cuid())
+  scope      String   // "conversation" | "agent" | "team"
+  agentId    String?
+  agentName  String?
+  startDate  DateTime?
+  endDate    DateTime?
+  convCount  Int      @default(0)
+  result     String   @db.Text
+  refs       Json     @default("[]") // ConvRef[]
+  createdBy  String
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([scope, agentId])
+  @@map("evaluation_histories")
+}
+
+// stepType: "greeting" | "keyword" | "fallback"
+model ConversationFlow {
+  id        String   @id @default(cuid())
+  order     Int      @default(0)
+  stepType  String   @default("keyword")
+  name      String
+  keywords  String[] @default([])
+  message   String
+  mediaUrl  String?
+  mediaName String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  @@index([order])
+  @@map("conversation_flows")
+}
+
+model PushSubscription {
+  id        String   @id @default(cuid())
+  userId    String
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("push_subscriptions")
+}
