@@ -45,3 +45,6 @@ next-env.d.ts
 
 # Auth WhatsApp QR
 /.wa-auth
+
+# Kredensial lokal, jangan pernah di-commit
+/.secrets

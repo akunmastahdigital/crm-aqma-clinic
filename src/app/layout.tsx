@@ -19,7 +19,14 @@ const cormorant = Cormorant_Garamond({
 export const metadata: Metadata = {
   title: "Aqma CRM",
   description: "Aqma Aesthetic Clinic — CRM & Omnichannel",
-  icons: { icon: "/logo.png" },
+  icons: {
+    // favicon.ico ada di src/app/, otomatis dipakai Next.js
+    icon: [
+      { url: "/icon-192.png", sizes: "192x192", type: "image/png" },
+      { url: "/icon-512.png", sizes: "512x512", type: "image/png" },
+    ],
+    apple: "/apple-icon.png",
+  },
 };
 
 export default function RootLayout({
