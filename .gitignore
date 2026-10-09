@@ -48,3 +48,9 @@ next-env.d.ts
 
 # Kredensial lokal, jangan pernah di-commit
 /.secrets
+
+# Hasil eksplorasi sistem pihak ketiga (jangan di-commit)
+/.scratch
+
+# Log deploy, lokal saja
+/logs
