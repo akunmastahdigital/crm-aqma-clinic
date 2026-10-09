@@ -101,3 +101,16 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: #A1A692;
 }
+
+/* Animasi pesan baru di inbox — efek pantul / spring */
+@keyframes msg-in {
+  0%   { opacity: 0; transform: translateY(12px); }
+  55%  { opacity: 1; transform: translateY(-4px); }
+  75%  { transform: translateY(2px); }
+  90%  { transform: translateY(-1px); }
+  100% { transform: translateY(0); }
+}
+.msg-new-in,
+.msg-new-out {
+  animation: msg-in 0.45s ease-out both;
+}

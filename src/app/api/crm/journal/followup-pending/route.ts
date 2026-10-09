@@ -33,6 +33,7 @@ export async function GET() {
           id: true,
           name: true,
           externalId: true,
+          tags: true,
           conversations: {
             orderBy: { lastMessageAt: "desc" },
             take: 1,
@@ -53,6 +54,7 @@ export async function GET() {
     customer: {
       name: j.customer.name,
       externalId: j.customer.externalId,
+      tags: j.customer.tags,
     },
     conversationId: j.customer.conversations[0]?.id ?? null,
     assignedTo: { name: j.user.name },

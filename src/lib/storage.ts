@@ -4,8 +4,11 @@ import path from "path";
 // Storage adapter — sekarang simpan di disk server. Pindah ke R2 nanti
 // cukup ganti implementasi saveMedia (URL & pemanggil tetap sama).
 
-// Simpan di /var/www agar bisa disajikan nginx (www-data tak bisa baca /root).
-const DIR = process.env.MEDIA_DIR || "/var/www/crm-uploads";
+// Default disimpan di dalam folder project ini, BUKAN di /var/www.
+// Server ini dipakai banyak aplikasi klien lain; web root bersama bukan milik kita.
+// Supaya file bisa diakses browser, nginx perlu satu blok location /uploads/
+// yang menunjuk ke folder ini (lihat docs/deploy.md).
+const DIR = process.env.MEDIA_DIR || "/root/work/crm-aqma-clinic/uploads";
 const BASE = process.env.MEDIA_BASE_URL || "/uploads";
 
 export type MediaType = "image" | "video" | "audio" | "document";

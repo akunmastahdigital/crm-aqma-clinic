@@ -36,6 +36,7 @@ export const NAV: NavGroup[] = [
       { label: "Automasi", href: "/automation", icon: "Zap", ability: "manage_automation" },
       { label: "Tracking Links", href: "/tracking", icon: "Link2", ability: "manage_automation" },
       { label: "Analisa Iklan", href: "/analisa-iklan", icon: "TrendingUp", ability: "view_reports" },
+      { label: "Laporan Bulanan", href: "/report", icon: "FileBarChart", ability: "view_reports" },
       { label: "Resume AI", href: "/resume", icon: "BrainCircuit", ability: "view_reports" },
       { label: "Target Tim", href: "/targets", icon: "Target", ability: "view_reports" },
       { label: "Evaluasi Tim", href: "/evaluation", icon: "ClipboardCheck", ability: "manage_owner" },

@@ -28,7 +28,8 @@ type JEntry = {
   user: { id: string; name: string };
   stage: { id: string; name: string } | null;
 };
-type Widgets = { fuToday: number; overdue: number; actToday: number };
+type Widgets = { fuToday: number; overdue: number; actTotal: number; actByType: Record<string, number> };
+type AgentStat = { userId: string; name: string; fuToday: number; overdue: number; actToday: number };
 type LabelItem = { name: string; color: string };
 type JSettings = {
   journal_labels: LabelItem[];
@@ -67,7 +68,11 @@ function isDueToday(e: JEntry) {
 export function JurnalClient({ sessionUserId, sessionRole }: { sessionUserId: string; sessionRole: string }) {
   const [entries, setEntries] = useState<JEntry[]>([]);
   const [total, setTotal] = useState(0);
-  const [widgets, setWidgets] = useState<Widgets>({ fuToday: 0, overdue: 0, actToday: 0 });
+  const [widgets, setWidgets] = useState<Widgets>({ fuToday: 0, overdue: 0, actTotal: 0, actByType: {} });
+  const [widgetPeriode, setWidgetPeriode] = useState("today");
+  const [widgetCustomFrom, setWidgetCustomFrom] = useState("");
+  const [widgetCustomTo, setWidgetCustomTo] = useState("");
+  const [agentBreakdown, setAgentBreakdown] = useState<AgentStat[]>([]);
   const [settings, setSettings] = useState<JSettings>({
     journal_labels: [], followup_types: [], followup_responses: [],
     cancel_reasons: [], fail_closing_labels: [], closing_definition: { useLabel: false, labels: [], useStage: false, stages: [] },
@@ -80,6 +85,7 @@ export function JurnalClient({ sessionUserId, sessionRole }: { sessionUserId: st
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [filterUser, setFilterUser] = useState("");
+  const [filterActivity, setFilterActivity] = useState("");
   const [filterLabel, setFilterLabel] = useState("");
   const [filterStatus, setFilterStatus] = useState("");
   const [filterQ, setFilterQ] = useState("");
@@ -116,10 +122,30 @@ export function JurnalClient({ sessionUserId, sessionRole }: { sessionUserId: st
     return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Jakarta" });
   }
 
+  // Hitung range tanggal untuk widget aktivitas
+  function widgetRange() {
+    const tz = "Asia/Jakarta";
+    const d = new Date();
+    const tStr = d.toLocaleDateString("en-CA", { timeZone: tz });
+    if (widgetPeriode === "today") return { from: tStr, to: tStr };
+    if (widgetPeriode === "yesterday") {
+      const y = new Date(d); y.setDate(y.getDate() - 1);
+      const s = y.toLocaleDateString("en-CA", { timeZone: tz });
+      return { from: s, to: s };
+    }
+    const days: Record<string, number> = { "3d": 2, "7d": 6, "30d": 29 };
+    if (days[widgetPeriode] !== undefined) {
+      const f = new Date(d); f.setDate(f.getDate() - days[widgetPeriode]);
+      return { from: f.toLocaleDateString("en-CA", { timeZone: tz }), to: tStr };
+    }
+    return { from: widgetCustomFrom || tStr, to: widgetCustomTo || tStr };
+  }
+
   // Load data
   const load = useCallback(async () => {
     const sp = new URLSearchParams({ take: String(TAKE), skip: String(skip) });
     if (filterUser) sp.set("userId", filterUser);
+    if (filterActivity) sp.set("activityType", filterActivity);
     if (filterLabel) sp.set("label", filterLabel);
     if (filterStatus) sp.set("status", filterStatus);
     if (debouncedQ) sp.set("q", debouncedQ);
@@ -132,14 +158,19 @@ export function JurnalClient({ sessionUserId, sessionRole }: { sessionUserId: st
     }
     if (from) sp.set("dateFrom", from);
     if (to) sp.set("dateTo", to);
+    const wr = widgetRange();
+    if (wr.from) sp.set("widgetFrom", wr.from);
+    if (wr.to) sp.set("widgetTo", wr.to);
     const r = await fetch(`/api/crm/journal?${sp}`);
     if (r.ok) {
       const d = await r.json();
       setEntries(d.items);
       setTotal(d.total);
       setWidgets(d.widgets);
+      setAgentBreakdown(d.agentBreakdown ?? []);
     }
-  }, [skip, filterUser, filterLabel, filterStatus, debouncedQ, dateFrom, dateTo, periode]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [skip, filterUser, filterActivity, filterLabel, filterStatus, debouncedQ, dateFrom, dateTo, periode, widgetPeriode, widgetCustomFrom, widgetCustomTo]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -324,7 +355,7 @@ export function JurnalClient({ sessionUserId, sessionRole }: { sessionUserId: st
       <div className="p-6 space-y-5">
 
         {/* Widget cards */}
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-2 gap-4">
           <div className="rounded-[var(--radius-lg)] border border-border bg-white p-4">
             <div className="flex items-center gap-2 text-muted-foreground">
               <CalendarClock className="h-4 w-4" />
@@ -339,14 +370,93 @@ export function JurnalClient({ sessionUserId, sessionRole }: { sessionUserId: st
             </div>
             <div className={cn("mt-2 text-2xl font-bold", widgets.overdue > 0 && "text-danger")}>{widgets.overdue}</div>
           </div>
-          <div className="rounded-[var(--radius-lg)] border border-border bg-white p-4">
+        </div>
+
+        {/* Aktivitas — dengan filter tanggal dan breakdown per kategori */}
+        <div className="rounded-[var(--radius-lg)] border border-border bg-white p-4 space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-2 text-muted-foreground">
               <Activity className="h-4 w-4" />
-              <span className="text-xs font-medium">Aktivitas Hari Ini</span>
+              <span className="text-xs font-medium">Aktivitas</span>
+              <span className="text-lg font-bold text-foreground ml-1">{widgets.actTotal}</span>
             </div>
-            <div className="mt-2 text-2xl font-bold">{widgets.actToday}</div>
+            {/* Filter periode widget */}
+            <div className="flex flex-wrap items-center gap-1.5">
+              {(["today","yesterday","3d","7d","30d","custom"] as const).map(p => (
+                <button
+                  key={p}
+                  onClick={() => setWidgetPeriode(p)}
+                  className={cn(
+                    "h-7 rounded-md px-2.5 text-xs font-medium transition-colors",
+                    widgetPeriode === p ? "bg-primary text-white" : "border border-border text-muted-foreground hover:bg-muted"
+                  )}
+                >
+                  {p === "today" ? "Hari Ini" : p === "yesterday" ? "Kemarin" : p === "3d" ? "3 Hari" : p === "7d" ? "7 Hari" : p === "30d" ? "30 Hari" : "Custom"}
+                </button>
+              ))}
+              {widgetPeriode === "custom" && (
+                <div className="flex items-center gap-1.5">
+                  <input type="date" value={widgetCustomFrom} onChange={e => setWidgetCustomFrom(e.target.value)}
+                    className="h-7 rounded-md border border-input bg-white px-2 text-xs outline-none focus:border-primary" />
+                  <span className="text-xs text-muted-foreground">–</span>
+                  <input type="date" value={widgetCustomTo} onChange={e => setWidgetCustomTo(e.target.value)}
+                    className="h-7 rounded-md border border-input bg-white px-2 text-xs outline-none focus:border-primary" />
+                </div>
+              )}
+            </div>
+          </div>
+          {/* Breakdown per tipe */}
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {[
+              { key: "Lead Baru", color: "bg-blue-50 text-blue-700 border-blue-200" },
+              { key: "Follow Up", color: "bg-amber-50 text-amber-700 border-amber-200" },
+              { key: "Closing",   color: "bg-emerald-50 text-emerald-700 border-emerald-200" },
+              { key: "Admin",     color: "bg-slate-50 text-slate-600 border-slate-200" },
+            ].map(({ key, color }) => (
+              <div key={key} className={cn("rounded-lg border p-3", color)}>
+                <div className="text-xs font-medium opacity-80">{key}</div>
+                <div className="mt-1 text-2xl font-bold">{widgets.actByType[key] ?? 0}</div>
+              </div>
+            ))}
           </div>
         </div>
+
+        {/* Agent breakdown — hanya tampil untuk non-AGENT role */}
+        {sessionRole !== "AGENT" && agentBreakdown.length > 0 && (
+          <div className="overflow-hidden rounded-[var(--radius-lg)] border border-border bg-white">
+            <div className="border-b border-border px-4 py-2.5 text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+              Breakdown per Sales
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-muted/20 text-xs font-medium text-muted-foreground">
+                  <tr>
+                    <th className="px-4 py-2 text-left">Sales</th>
+                    <th className="px-4 py-2 text-center">FU Hari Ini</th>
+                    <th className="px-4 py-2 text-center">Overdue</th>
+                    <th className="px-4 py-2 text-center">Aktivitas</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {agentBreakdown.map(a => (
+                    <tr key={a.userId} className="hover:bg-muted/10">
+                      <td className="px-4 py-2 font-medium">{a.name}</td>
+                      <td className="px-4 py-2 text-center">
+                        <span className={cn("inline-block min-w-[1.75rem] rounded-full px-2 py-0.5 text-xs font-semibold", a.fuToday > 0 ? "bg-amber-100 text-amber-700" : "text-muted-foreground")}>{a.fuToday}</span>
+                      </td>
+                      <td className="px-4 py-2 text-center">
+                        <span className={cn("inline-block min-w-[1.75rem] rounded-full px-2 py-0.5 text-xs font-semibold", a.overdue > 0 ? "bg-red-100 text-red-600" : "text-muted-foreground")}>{a.overdue}</span>
+                      </td>
+                      <td className="px-4 py-2 text-center">
+                        <span className={cn("inline-block min-w-[1.75rem] rounded-full px-2 py-0.5 text-xs font-semibold", a.actToday > 0 ? "bg-emerald-100 text-emerald-700" : "text-muted-foreground")}>{a.actToday}</span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
 
         {/* Filter bar */}
         <div className="flex flex-wrap items-center gap-3 rounded-[var(--radius-lg)] border border-border bg-white p-3">
@@ -372,6 +482,11 @@ export function JurnalClient({ sessionUserId, sessionRole }: { sessionUserId: st
               {team.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
             </select>
           )}
+          <select value={filterActivity} onChange={e => { setFilterActivity(e.target.value); setSkip(0); }}
+            className="h-8 rounded-md border border-input bg-white px-2 text-xs outline-none focus:border-primary">
+            <option value="">Semua Aktivitas</option>
+            {ACTIVITY_TYPES.map(a => <option key={a} value={a}>{a}</option>)}
+          </select>
           <select value={filterLabel} onChange={e => { setFilterLabel(e.target.value); setSkip(0); }}
             className="h-8 rounded-md border border-input bg-white px-2 text-xs outline-none focus:border-primary">
             <option value="">Semua Label</option>

@@ -26,6 +26,18 @@ export async function POST(req: Request) {
     : [];
   const replyText = (body.replyText ?? "").toString();
   const attachments = Array.isArray(body.attachments) ? body.attachments : [];
+  const buttons = Array.isArray(body.buttons)
+    ? body.buttons.filter((b: { type?: string; label?: string; value?: string }) =>
+        (b.type === "quick_reply" || b.type === "url") && b.label?.trim() && b.value?.trim()
+      )
+    : [];
+  const VALID_CHANNELS = ["WA_CLOUD", "WA_QR", "INSTAGRAM", "MESSENGER", "WEBCHAT"];
+  const channels = Array.isArray(body.channels)
+    ? body.channels.filter((c: unknown) => VALID_CHANNELS.includes(String(c)))
+    : [];
+  const aiRephrase = !!body.aiRephrase;
+  const delayMin = Math.max(0, Math.min(300, Number(body.delayMin) || 0));
+  const delayMax = Math.max(delayMin, Math.min(300, Number(body.delayMax) || 0));
 
   if (!name) return NextResponse.json({ error: "nama wajib" }, { status: 400 });
   if (trigger === "KEYWORD" && keywords.length === 0)
@@ -35,7 +47,7 @@ export async function POST(req: Request) {
 
   const count = await prisma.autoReply.count();
   const item = await prisma.autoReply.create({
-    data: { name, trigger, keywords, replyText: replyText || null, attachments, order: count },
+    data: { name, trigger, keywords, replyText: replyText || null, attachments, buttons: buttons.length ? buttons : undefined, channels, aiRephrase, delayMin, delayMax, order: count },
   });
   return NextResponse.json({ item });
 }

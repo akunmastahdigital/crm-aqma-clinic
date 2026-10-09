@@ -14,9 +14,21 @@ type FollowUp = {
   scheduledAt: string;
   note: string | null;
   status: "PENDING" | "DONE";
-  customer: { id: string; name: string | null; externalId: string };
+  customer: { id: string; name: string | null; externalId: string; tags: string[] };
   assignedTo: { name: string } | null;
 };
+
+const TAG_COLORS: Record<string, string> = {
+  "Deal":           "#16a34a",
+  "Reservasi":      "#16a34a",
+  "Potensi":        "#0ea5e9",
+  "Respon Panjang": "#0ea5e9",
+  "Drop":           "#f59e0b",
+  "Respon Pendek":  "#f59e0b",
+  "Gagal Closing":  "#dc2626",
+  "Greeting text":  "#8b5cf6",
+};
+function tagColor(tag: string) { return TAG_COLORS[tag] ?? "#6b7280"; }
 
 type Agent = { id: string; name: string };
 
@@ -320,11 +332,24 @@ export function KalenderClient({ role }: { role: string }) {
                     >
                       {/* Lead & status */}
                       <div className="flex items-start justify-between gap-2">
-                        <div className="min-w-0">
+                        <div className="min-w-0 flex-1">
                           <p className="font-semibold text-sm truncate">
                             {fu.customer.name ?? fu.customer.externalId}
                           </p>
-                          <p className="text-xs text-muted-foreground">
+                          {fu.customer.tags.length > 0 && (
+                            <div className="flex flex-wrap gap-1 mt-1">
+                              {fu.customer.tags.map((tag) => (
+                                <span
+                                  key={tag}
+                                  className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold text-white"
+                                  style={{ backgroundColor: tagColor(tag) }}
+                                >
+                                  {tag}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                          <p className="text-xs text-muted-foreground mt-1">
                             {fmtTime(fu.scheduledAt)} WIB
                             {fu.assignedTo ? ` · ${fu.assignedTo.name}` : ""}
                           </p>

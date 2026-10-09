@@ -90,6 +90,29 @@ const logger = {
 const state = { connected: false, qr: null, number: null };
 let sock = null;
 
+// --- Antrian kirim pesan (serial, jeda antar pesan agar tidak spam-detected) ---
+const SEND_DELAY_MS = 400;
+const sendQueue = [];
+let queueRunning = false;
+
+async function runQueue() {
+  if (queueRunning) return;
+  queueRunning = true;
+  while (sendQueue.length > 0) {
+    const { task, resolve, reject } = sendQueue.shift();
+    try { resolve(await task()); } catch (e) { reject(e); }
+    if (sendQueue.length > 0) await new Promise((r) => setTimeout(r, SEND_DELAY_MS));
+  }
+  queueRunning = false;
+}
+
+function enqueue(task) {
+  return new Promise((resolve, reject) => {
+    sendQueue.push({ task, resolve, reject });
+    runQueue();
+  });
+}
+
 // Pesan masuk non-teks: tampilkan penanda jenis (human agent unduh manual dari WA).
 function extractIncomingText(msg) {
   if (msg.conversation) return msg.conversation;
@@ -114,7 +137,7 @@ async function start() {
     logger,
     printQRInTerminal: false,
     browser: ["Aqma CRM", "Chrome", "1.0"],
-    syncFullHistory: false,
+    syncFullHistory: true,
   });
 
   sock.ev.on("creds.update", saveCreds);
@@ -167,7 +190,113 @@ async function start() {
     }
   });
 
+  // Sinkron riwayat chat saat pertama terhubung (syncFullHistory: true)
+  sock.ev.on("messaging-history.set", async ({ messages: histMsgs, isLatest }) => {
+    if (!histMsgs?.length) return;
+    const inboundCount = histMsgs.filter(m => !m.key?.fromMe).length;
+    const outboundCount = histMsgs.filter(m => !!m.key?.fromMe).length;
+    console.log(`[history] Menerima ${histMsgs.length} pesan riwayat (isLatest=${isLatest}, fromMe=true:${outboundCount}, fromMe=false:${inboundCount})...`);
+    let imported = 0;
+    let skipped = 0;
+    // Urutkan dari terlama ke terbaru agar conversation dibuat dengan timestamp benar
+    const sorted = [...histMsgs].sort(
+      (a, b) => Number(a.messageTimestamp || 0) - Number(b.messageTimestamp || 0),
+    );
+    for (const m of sorted) {
+      try {
+        const jid = m.key?.remoteJid || "";
+        if (!jid || jid.endsWith("@g.us") || jid.endsWith("@broadcast")) continue;
+        const from = jid.split("@")[0];
+        if (!from || from.length < 5) continue;
+        const fromMe = !!m.key?.fromMe;
+        let msg = m.message || {};
+        if (msg.ephemeralMessage?.message) msg = msg.ephemeralMessage.message;
+        if (msg.viewOnceMessage?.message) msg = msg.viewOnceMessage.message;
+        // Ekstrak teks — untuk media gunakan caption atau placeholder
+        const text =
+          msg.conversation ||
+          msg.extendedTextMessage?.text ||
+          (msg.imageMessage ? (msg.imageMessage.caption || "📷 [Gambar]") : "") ||
+          (msg.videoMessage ? (msg.videoMessage.caption || "🎥 [Video]") : "") ||
+          (msg.audioMessage ? (msg.audioMessage.ptt ? "🎙️ [Voice note]" : "🎵 [Audio]") : "") ||
+          (msg.stickerMessage ? "🌟 [Stiker]" : "") ||
+          (msg.documentMessage ? `📎 ${msg.documentMessage.fileName || "[Dokumen]"}` : "") ||
+          (msg.locationMessage ? "📍 [Lokasi]" : "") ||
+          (msg.contactMessage ? "👤 [Kontak]" : "") ||
+          "";
+        if (!text.trim()) { skipped++; continue; }
+        const res = await fetch(`${APP_URL}/api/internal/wa-history-ingest`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-internal-secret": SECRET },
+          body: JSON.stringify({
+            from,
+            name: m.pushName || null,
+            text,
+            externalId: m.key.id || null,
+            fromMe,
+            timestamp: Number(m.messageTimestamp || 0) * 1000,
+            channelId: CHANNEL_ID,
+          }),
+        });
+        const out = await res.json().catch(() => ({}));
+        if (out.skipped) skipped++; else imported++;
+        // Throttle: jeda kecil setiap 100 pesan agar tidak flood DB
+        if ((imported + skipped) % 100 === 0) {
+          await new Promise((r) => setTimeout(r, 300));
+        }
+      } catch (e) {
+        console.error("[history] err:", e.message);
+        skipped++;
+      }
+    }
+    console.log(`[history] Selesai: ${imported} diimpor, ${skipped} dilewati.`);
+  });
+
   sock.ev.on("messages.upsert", async (up) => {
+    // Pesan historis inbound yang datang lewat "append" — simpan tanpa automation
+    if (up.type === "append") {
+      for (const m of up.messages) {
+        try {
+          const jid = m.key?.remoteJid || "";
+          if (!jid || jid.endsWith("@g.us") || jid.endsWith("@broadcast")) continue;
+          const from = jid.split("@")[0];
+          if (!from || from.length < 5) continue;
+          const fromMe = !!m.key?.fromMe;
+          let msg = m.message || {};
+          if (msg.ephemeralMessage?.message) msg = msg.ephemeralMessage.message;
+          if (msg.viewOnceMessage?.message) msg = msg.viewOnceMessage.message;
+          const text =
+            msg.conversation ||
+            msg.extendedTextMessage?.text ||
+            (msg.imageMessage ? (msg.imageMessage.caption || "📷 [Gambar]") : "") ||
+            (msg.videoMessage ? (msg.videoMessage.caption || "🎥 [Video]") : "") ||
+            (msg.audioMessage ? (msg.audioMessage.ptt ? "🎙️ [Voice note]" : "🎵 [Audio]") : "") ||
+            (msg.stickerMessage ? "🌟 [Stiker]" : "") ||
+            (msg.documentMessage ? `📎 ${msg.documentMessage.fileName || "[Dokumen]"}` : "") ||
+            (msg.locationMessage ? "📍 [Lokasi]" : "") ||
+            (msg.contactMessage ? "👤 [Kontak]" : "") ||
+            "";
+          if (!text.trim()) continue;
+          await fetch(`${APP_URL}/api/internal/wa-history-ingest`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "x-internal-secret": SECRET },
+            body: JSON.stringify({
+              from,
+              name: m.pushName || null,
+              text,
+              externalId: m.key.id || null,
+              fromMe,
+              timestamp: Number(m.messageTimestamp || 0) * 1000,
+              channelId: CHANNEL_ID,
+            }),
+          }).catch((e) => console.error("[append] ingest err:", e.message));
+        } catch (e) {
+          console.error("[append] err:", e);
+        }
+      }
+      return;
+    }
+
     if (up.type !== "notify") return;
     for (const m of up.messages) {
       try {
@@ -247,36 +376,39 @@ createServer(async (req, res) => {
     const b = await readBody(req);
     try {
       if (!sock || !state.connected) throw new Error("WA belum tersambung");
-      const jid = String(b.to).replace(/\D/g, "") + "@s.whatsapp.net";
-      const ids = [];
+      const ids = await enqueue(async () => {
+        const jid = String(b.to).replace(/\D/g, "") + "@s.whatsapp.net";
+        const result = [];
 
-      // kutipan (quoted) hanya nempel di pesan pertama
-      let quoted = b.replyTo?.id
-        ? {
-            key: { remoteJid: jid, fromMe: !!b.replyTo.fromMe, id: String(b.replyTo.id), ...(b.replyTo.fromMe ? {} : { participant: jid }) },
-            message: { conversation: String(b.replyTo.text || "") },
-          }
-        : undefined;
-      const opt = () => {
-        const o = quoted ? { quoted } : undefined;
-        quoted = undefined; // pakai sekali
-        return o;
-      };
+        // kutipan (quoted) hanya nempel di pesan pertama
+        let quoted = b.replyTo?.id
+          ? {
+              key: { remoteJid: jid, fromMe: !!b.replyTo.fromMe, id: String(b.replyTo.id), ...(b.replyTo.fromMe ? {} : { participant: jid }) },
+              message: { conversation: String(b.replyTo.text || "") },
+            }
+          : undefined;
+        const opt = () => {
+          const o = quoted ? { quoted } : undefined;
+          quoted = undefined; // pakai sekali
+          return o;
+        };
 
-      if (b.text && String(b.text).trim()) {
-        const sent = await sock.sendMessage(jid, { text: String(b.text) }, opt());
-        ids.push(sent?.key?.id || null);
-      }
-      for (const a of b.attachments || []) {
-        const buf = readFileSync(localOf(a.url));
-        const cap = a.name || undefined;
-        let sent;
-        if (a.type === "image") sent = await sock.sendMessage(jid, { image: buf, caption: cap }, opt());
-        else if (a.type === "video") sent = await sock.sendMessage(jid, { video: buf, caption: cap }, opt());
-        else if (a.type === "audio") sent = await sock.sendMessage(jid, { audio: buf, mimetype: "audio/ogg; codecs=opus", ptt: true }, opt());
-        else sent = await sock.sendMessage(jid, { document: buf, mimetype: mimeFor(a.name || a.url), fileName: a.name || String(a.url).split("/").pop() }, opt());
-        ids.push(sent?.key?.id || null);
-      }
+        if (b.text && String(b.text).trim()) {
+          const sent = await sock.sendMessage(jid, { text: String(b.text) }, opt());
+          result.push(sent?.key?.id || null);
+        }
+        for (const a of b.attachments || []) {
+          const buf = readFileSync(localOf(a.url));
+          const cap = a.name || undefined;
+          let sent;
+          if (a.type === "image") sent = await sock.sendMessage(jid, { image: buf, caption: cap }, opt());
+          else if (a.type === "video") sent = await sock.sendMessage(jid, { video: buf, caption: cap }, opt());
+          else if (a.type === "audio") sent = await sock.sendMessage(jid, { audio: buf, mimetype: "audio/ogg; codecs=opus", ptt: true }, opt());
+          else sent = await sock.sendMessage(jid, { document: buf, mimetype: mimeFor(a.name || a.url), fileName: a.name || String(a.url).split("/").pop() }, opt());
+          result.push(sent?.key?.id || null);
+        }
+        return result;
+      });
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ ok: true, ids }));
     } catch (e) {

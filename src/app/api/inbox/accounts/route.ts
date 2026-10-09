@@ -27,10 +27,13 @@ export async function GET() {
     }),
   ]);
 
+  const hasWebChat = await prisma.conversation.count({ where: { channel: "WEBCHAT" }, take: 1 });
+
   const accounts = [
     ...waba.map((c) => ({ id: c.phoneNumberId, label: c.label, sub: c.displayPhone ?? null, type: "WA_CLOUD" as const })),
     ...qr.map((c) => ({ id: c.id, label: c.label, sub: c.phone ?? null, type: "WA_QR" as const })),
     ...meta.map((c) => ({ id: c.id, label: c.label, sub: null, type: c.type as "INSTAGRAM" | "MESSENGER" })),
+    ...(hasWebChat > 0 ? [{ id: "WEBCHAT", label: "Web Chat", sub: "Widget chat di landing page", type: "WEBCHAT" as const }] : []),
   ];
 
   return NextResponse.json({ accounts });

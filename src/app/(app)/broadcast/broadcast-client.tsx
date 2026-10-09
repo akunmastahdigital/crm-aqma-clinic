@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Megaphone, Send, Users, Filter } from "lucide-react";
+import { Megaphone, Send, Users, Filter, ChevronDown, ChevronUp, CheckCheck, Check, AlertCircle } from "lucide-react";
 import { PageHeader } from "@/components/page-header";
 import { relativeTime } from "@/lib/format";
 
@@ -16,6 +16,19 @@ type Job = {
   id: string; templateName: string; total: number;
   sent: number; failed: number; status: string; createdAt: string;
 };
+type Recipient = {
+  id: string; to: string; name: string | null; status: string;
+  error: string | null; wamid: string | null; deliveryStatus: string | null;
+};
+
+function DeliveryBadge({ bcStatus, deliveryStatus }: { bcStatus: string; deliveryStatus: string | null }) {
+  if (bcStatus === "failed") return <span className="flex items-center gap-1 text-red-600 text-[11px]"><AlertCircle className="h-3 w-3" /> Gagal kirim</span>;
+  if (deliveryStatus === "READ") return <span className="flex items-center gap-1 text-blue-600 text-[11px]"><CheckCheck className="h-3 w-3" /> Dibaca</span>;
+  if (deliveryStatus === "DELIVERED") return <span className="flex items-center gap-1 text-green-600 text-[11px]"><CheckCheck className="h-3 w-3" /> Diterima</span>;
+  if (deliveryStatus === "FAILED") return <span className="flex items-center gap-1 text-red-600 text-[11px]"><AlertCircle className="h-3 w-3" /> Ditolak WA</span>;
+  if (bcStatus === "sent") return <span className="flex items-center gap-1 text-muted-foreground text-[11px]"><Check className="h-3 w-3" /> Terkirim</span>;
+  return <span className="text-muted-foreground text-[11px]">Menunggu</span>;
+}
 
 const LEAD_STATUS_OPTIONS = [
   { value: "",       label: "Semua status lead" },
@@ -33,6 +46,10 @@ export function BroadcastClient() {
   const [agents,     setAgents]     = useState<Agent[]>([]);
   const [totalWa,    setTotalWa]    = useState(0);
   const [jobs,       setJobs]       = useState<Job[]>([]);
+  const [month,      setMonth]      = useState("");
+  const [expandedJob, setExpandedJob] = useState<string | null>(null);
+  const [recipients,  setRecipients]  = useState<Record<string, Recipient[]>>({});
+  const [loadingRecip, setLoadingRecip] = useState<string | null>(null);
 
   // Form state
   const [channelId,     setChannelId]     = useState("");
@@ -52,8 +69,9 @@ export function BroadcastClient() {
 
   const countTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const load = useCallback(async () => {
-    const r = await fetch("/api/broadcast");
+  const load = useCallback(async (m?: string) => {
+    const p = m ? `?month=${m}` : "";
+    const r = await fetch(`/api/broadcast${p}`);
     if (r.ok) {
       const d = await r.json();
       setChannels(d.channels);
@@ -68,11 +86,24 @@ export function BroadcastClient() {
     }
   }, []);
 
+  async function toggleJob(jobId: string) {
+    if (expandedJob === jobId) { setExpandedJob(null); return; }
+    setExpandedJob(jobId);
+    if (recipients[jobId]) return;
+    setLoadingRecip(jobId);
+    const r = await fetch(`/api/broadcast/${jobId}`);
+    if (r.ok) {
+      const d = await r.json();
+      setRecipients((prev) => ({ ...prev, [jobId]: d.recipients }));
+    }
+    setLoadingRecip(null);
+  }
+
   useEffect(() => {
-    load();
-    const t = setInterval(load, 5000);
+    load(month);
+    const t = setInterval(() => load(month), 5000);
     return () => clearInterval(t);
-  }, [load]);
+  }, [load, month]);
 
   // Fetch jumlah penerima setiap kali filter berubah (debounced 400ms)
   useEffect(() => {
@@ -321,30 +352,77 @@ export function BroadcastClient() {
 
         {/* ── Riwayat ── */}
         <div className="rounded-[var(--radius-lg)] border border-border bg-white p-5">
-          <div className="mb-4 font-semibold">Riwayat & Progres</div>
-          <div className="space-y-2">
-            {jobs.length === 0 && <div className="text-sm text-muted-foreground">Belum ada broadcast.</div>}
+          <div className="mb-3 flex items-center justify-between gap-2">
+            <span className="font-semibold">Riwayat & Progres</span>
+            <input
+              type="month"
+              value={month}
+              onChange={(e) => { setMonth(e.target.value); setExpandedJob(null); setRecipients({}); }}
+              className="h-8 rounded-md border border-input px-2 text-xs outline-none focus:border-primary"
+            />
+          </div>
+          <div className="space-y-2 max-h-[600px] overflow-y-auto pr-1">
+            {jobs.length === 0 && <div className="text-sm text-muted-foreground">Belum ada broadcast{month ? ` di bulan ini` : ""}.</div>}
             {jobs.map((j) => {
               const pct = j.total ? Math.round(((j.sent + j.failed) / j.total) * 100) : 0;
+              const isOpen = expandedJob === j.id;
+              const rcps = recipients[j.id] ?? [];
               return (
-                <div key={j.id} className="rounded-[var(--radius-md)] border border-border p-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="truncate text-sm font-medium">{j.templateName}</span>
-                    <span className={"rounded-full px-2 py-0.5 text-[11px] font-medium " + (
-                      j.status === "done"    ? "bg-green-100 text-green-700" :
-                      j.status === "failed"  ? "bg-red-100 text-red-600" :
-                                               "bg-amber-100 text-amber-700"
-                    )}>
-                      {j.status === "done" ? "Selesai" : j.status === "failed" ? "Gagal" : "Berjalan"}
-                    </span>
-                  </div>
-                  <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-muted">
-                    <div className="h-full bg-primary transition-all" style={{ width: `${pct}%` }} />
-                  </div>
-                  <div className="mt-1 flex justify-between text-[11px] text-muted-foreground">
-                    <span>{j.sent} terkirim · {j.failed} gagal · dari {j.total}</span>
-                    <span>{relativeTime(j.createdAt)}</span>
-                  </div>
+                <div key={j.id} className="rounded-[var(--radius-md)] border border-border">
+                  {/* Header baris */}
+                  <button
+                    type="button"
+                    onClick={() => toggleJob(j.id)}
+                    className="w-full p-3 text-left"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="truncate text-sm font-medium">{j.templateName}</span>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <span className={"rounded-full px-2 py-0.5 text-[11px] font-medium " + (
+                          j.status === "done"   ? "bg-green-100 text-green-700" :
+                          j.status === "failed" ? "bg-red-100 text-red-600" :
+                                                  "bg-amber-100 text-amber-700"
+                        )}>
+                          {j.status === "done" ? "Selesai" : j.status === "failed" ? "Gagal" : "Berjalan"}
+                        </span>
+                        {isOpen ? <ChevronUp className="h-3.5 w-3.5 text-muted-foreground" /> : <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />}
+                      </div>
+                    </div>
+                    <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                      <div className="h-full bg-primary transition-all" style={{ width: `${pct}%` }} />
+                    </div>
+                    <div className="mt-1 flex justify-between text-[11px] text-muted-foreground">
+                      <span>{j.sent} terkirim · {j.failed} gagal · dari {j.total}</span>
+                      <span>{relativeTime(j.createdAt)}</span>
+                    </div>
+                  </button>
+
+                  {/* Dropdown penerima */}
+                  {isOpen && (
+                    <div className="border-t border-border px-3 pb-3">
+                      {loadingRecip === j.id ? (
+                        <div className="py-3 text-center text-xs text-muted-foreground animate-pulse">Memuat penerima...</div>
+                      ) : rcps.length === 0 ? (
+                        <div className="py-3 text-center text-xs text-muted-foreground">Belum ada data penerima.</div>
+                      ) : (
+                        <div className="mt-2 divide-y divide-border text-xs max-h-60 overflow-y-auto">
+                          <div className="grid grid-cols-[1fr_auto] gap-2 pb-1 font-medium text-muted-foreground">
+                            <span>Lead</span><span>Status</span>
+                          </div>
+                          {rcps.map((r) => (
+                            <div key={r.id} className="grid grid-cols-[1fr_auto] gap-2 py-1.5 items-center">
+                              <div className="min-w-0">
+                                <div className="truncate font-medium">{r.name || r.to}</div>
+                                {r.name && <div className="text-muted-foreground">{r.to}</div>}
+                                {r.error && <div className="text-red-500 text-[10px] mt-0.5 truncate">{r.error}</div>}
+                              </div>
+                              <DeliveryBadge bcStatus={r.status} deliveryStatus={r.deliveryStatus} />
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               );
             })}

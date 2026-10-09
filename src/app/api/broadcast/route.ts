@@ -34,13 +34,19 @@ function buildWhere(filters: {
   return where;
 }
 
-export async function GET() {
+export async function GET(req: Request) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
 
+  const sp = new URL(req.url).searchParams;
+  const month = sp.get("month"); // format: "2026-09"
+  const jobWhere = month
+    ? { createdAt: { gte: new Date(`${month}-01`), lt: new Date(new Date(`${month}-01`).setMonth(new Date(`${month}-01`).getMonth() + 1)) } }
+    : {};
+
   const [jobs, channels, templates, waCustomers, minatTags, pipelines, agents] =
     await Promise.all([
-      prisma.broadcastJob.findMany({ orderBy: { createdAt: "desc" }, take: 20 }),
+      prisma.broadcastJob.findMany({ where: jobWhere, orderBy: { createdAt: "desc" }, take: month ? 200 : 20 }),
       prisma.wabaChannel.findMany({
         where: { active: true },
         select: { phoneNumberId: true, label: true, wabaId: true },

@@ -1,11 +1,12 @@
 "use client";
 import { useState, useEffect } from "react";
-import { Save, FlaskConical, CheckCircle, XCircle, Plug, Users, Bell, X } from "lucide-react";
+import { Save, FlaskConical, CheckCircle, XCircle, Plug, Users, Bell, X, KeyRound } from "lucide-react";
 
 const TABS = [
   { key: "integrasi", label: "Integrasi", icon: Plug },
   { key: "performa", label: "Performa Tim", icon: Users },
   { key: "notifikasi", label: "Notifikasi", icon: Bell },
+  { key: "akun", label: "Akun", icon: KeyRound },
 ];
 
 export default function SettingsPage() {
@@ -39,6 +40,7 @@ export default function SettingsPage() {
       {tab === "integrasi" && <IntegrasiTab />}
       {tab === "performa" && <PerformaTab />}
       {tab === "notifikasi" && <NotifikasiTab />}
+      {tab === "akun" && <AkunTab />}
     </div>
   );
 }
@@ -225,6 +227,98 @@ function PerformaTab() {
           {saving ? "Menyimpan..." : saved ? "Tersimpan!" : "Simpan"}
         </button>
       </div>
+    </div>
+  );
+}
+
+function AkunTab() {
+  const [current, setCurrent] = useState("");
+  const [newPw, setNewPw] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [result, setResult] = useState<{ ok?: boolean; error?: string } | null>(null);
+
+  async function save() {
+    setResult(null);
+    if (newPw !== confirm) {
+      setResult({ error: "Konfirmasi password tidak cocok" });
+      return;
+    }
+    setSaving(true);
+    const r = await fetch("/api/auth/change-password", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ currentPassword: current, newPassword: newPw }),
+    });
+    const d = await r.json();
+    setSaving(false);
+    if (d.ok) {
+      setResult({ ok: true });
+      setCurrent("");
+      setNewPw("");
+      setConfirm("");
+    } else {
+      setResult({ error: d.error ?? "Gagal mengganti password" });
+    }
+  }
+
+  const field = "h-9 w-full rounded-md border border-input px-3 text-sm outline-none focus:border-primary";
+
+  return (
+    <div className="rounded-lg border p-5 space-y-4 max-w-sm">
+      <div>
+        <p className="font-medium text-sm">Ganti Password</p>
+        <p className="text-xs text-muted-foreground mt-0.5">Berlaku untuk akun yang sedang login</p>
+      </div>
+
+      <div className="space-y-3">
+        <div>
+          <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Password Lama</label>
+          <input
+            className={field + " mt-1"}
+            type="password"
+            value={current}
+            onChange={e => setCurrent(e.target.value)}
+            placeholder="••••••••"
+          />
+        </div>
+        <div>
+          <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Password Baru</label>
+          <input
+            className={field + " mt-1"}
+            type="password"
+            value={newPw}
+            onChange={e => setNewPw(e.target.value)}
+            placeholder="Min. 8 karakter"
+          />
+        </div>
+        <div>
+          <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Konfirmasi Password Baru</label>
+          <input
+            className={field + " mt-1"}
+            type="password"
+            value={confirm}
+            onChange={e => setConfirm(e.target.value)}
+            placeholder="Ulangi password baru"
+          />
+        </div>
+      </div>
+
+      {result && (
+        <div className={`rounded-md px-3 py-2 text-sm flex items-center gap-2 ${result.ok ? "bg-green-50 text-green-700 border border-green-200" : "bg-red-50 text-red-700 border border-red-200"}`}>
+          {result.ok ? <CheckCircle className="w-4 h-4 shrink-0" /> : <XCircle className="w-4 h-4 shrink-0" />}
+          {result.ok ? "Password berhasil diubah!" : result.error}
+        </div>
+      )}
+
+      <button
+        onClick={save}
+        disabled={saving || !current || !newPw || !confirm}
+        className="flex items-center gap-1.5 h-9 px-4 rounded-md bg-primary text-white text-sm font-medium hover:bg-primary/90 disabled:opacity-50"
+      >
+        <Save className="w-3.5 h-3.5" />
+        {saving ? "Menyimpan..." : "Ganti Password"}
+      </button>
     </div>
   );
 }

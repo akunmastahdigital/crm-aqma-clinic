@@ -9,4 +9,5 @@ export const CHANNEL_META: Record<
   WA_CLOUD: { label: "WhatsApp Resmi", short: "WA", color: "#16a34a" },
   INSTAGRAM: { label: "Instagram", short: "IG", color: "#d6249f" },
   MESSENGER: { label: "Messenger", short: "MSG", color: "#0084ff" },
+  WEBCHAT: { label: "Web Chat", short: "Web Chat", color: "#7c3aed" },
 };

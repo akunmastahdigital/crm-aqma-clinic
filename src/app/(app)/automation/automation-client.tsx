@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Plus, X, Trash2, Paperclip, FileText, ImageIcon, Pencil } from "lucide-react";
+import { Plus, X, Trash2, Paperclip, FileText, ImageIcon, Pencil, Link2, MessageSquare, Phone } from "lucide-react";
 import { PageHeader } from "@/components/page-header";
 
 type Media = { url: string; type: string; name: string };
@@ -57,21 +57,44 @@ export function AutomationClient() {
   );
 }
 
+type WaButton = { type: "quick_reply" | "url" | "wa"; label: string; value: string; greetingText?: string };
+
 type AutoReply = {
   id: string;
   name: string;
   trigger: "KEYWORD" | "FIRST_MESSAGE";
   keywords: string[];
   replyText: string | null;
+  buttons: WaButton[] | null;
+  channels: string[];
+  aiRephrase: boolean;
+  delayMin: number;
+  delayMax: number;
   active: boolean;
 };
 
+const CHANNEL_OPTIONS = [
+  { value: "WA_CLOUD", label: "WA Cloud API" },
+  { value: "WA_QR", label: "WA Biasa (QR)" },
+  { value: "INSTAGRAM", label: "Instagram" },
+  { value: "MESSENGER", label: "Messenger" },
+  { value: "WEBCHAT", label: "Webchat" },
+];
+
+const EMPTY_BTN: WaButton = { type: "quick_reply", label: "", value: "" };
+
 function AutoReplyTab() {
   const [items, setItems] = useState<AutoReply[]>([]);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [trigger, setTrigger] = useState<"KEYWORD" | "FIRST_MESSAGE">("KEYWORD");
   const [keywords, setKeywords] = useState("");
   const [replyText, setReplyText] = useState("");
+  const [buttons, setButtons] = useState<WaButton[]>([]);
+  const [channels, setChannels] = useState<string[]>([]);
+  const [aiRephrase, setAiRephrase] = useState(false);
+  const [delayMin, setDelayMin] = useState(0);
+  const [delayMax, setDelayMax] = useState(0);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
@@ -81,6 +104,50 @@ function AutoReplyTab() {
   }, []);
   useEffect(() => { load(); }, [load]);
 
+  function addBtn() {
+    if (buttons.length >= 3) return;
+    setButtons((prev) => [...prev, { ...EMPTY_BTN }]);
+  }
+  function updateBtn(i: number, patch: Partial<WaButton>) {
+    setButtons((prev) => prev.map((b, idx) => idx === i ? { ...b, ...patch } as WaButton : b));
+  }
+  function removeBtn(i: number) {
+    setButtons((prev) => prev.filter((_, idx) => idx !== i));
+  }
+
+  function resetForm() {
+    setEditingId(null); setName(""); setTrigger("KEYWORD"); setKeywords(""); setReplyText(""); setButtons([]); setChannels([]); setAiRephrase(false); setDelayMin(0); setDelayMax(0);
+  }
+
+  function startEdit(it: AutoReply) {
+    setEditingId(it.id);
+    setName(it.name);
+    setTrigger(it.trigger);
+    setKeywords(it.keywords.join(", "));
+    setReplyText(it.replyText ?? "");
+    setButtons((it.buttons ?? []) as WaButton[]);
+    setChannels(it.channels ?? []);
+    setAiRephrase(it.aiRephrase ?? false);
+    setDelayMin(it.delayMin ?? 0);
+    setDelayMax(it.delayMax ?? 0);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function buildValidBtns() {
+    return buttons
+      .filter((b) => b.label.trim() && b.value.trim())
+      .map((b) => {
+        if (b.type === "wa") {
+          const phone = b.value.replace(/\D/g, "");
+          const url = b.greetingText?.trim()
+            ? `https://wa.me/${phone}?text=${encodeURIComponent(b.greetingText.trim())}`
+            : `https://wa.me/${phone}`;
+          return { type: "url" as const, label: b.label, value: url };
+        }
+        return { type: b.type as "quick_reply" | "url", label: b.label, value: b.value };
+      });
+  }
+
   async function add() {
     setErr("");
     setBusy(true);
@@ -88,16 +155,34 @@ function AutoReplyTab() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        name,
-        trigger,
+        name, trigger,
         keywords: keywords.split(",").map((s) => s.trim()).filter(Boolean),
-        replyText,
+        replyText, buttons: buildValidBtns(), channels, aiRephrase, delayMin, delayMax,
       }),
     });
     setBusy(false);
-    if (r.ok) { setName(""); setKeywords(""); setReplyText(""); load(); }
+    if (r.ok) { resetForm(); load(); }
     else setErr((await r.json()).error ?? "Gagal simpan");
   }
+
+  async function save() {
+    if (!editingId) return;
+    setErr("");
+    setBusy(true);
+    const r = await fetch(`/api/auto-replies/${editingId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name, trigger,
+        keywords: keywords.split(",").map((s) => s.trim()).filter(Boolean),
+        replyText, buttons: buildValidBtns(), channels, aiRephrase, delayMin, delayMax,
+      }),
+    });
+    setBusy(false);
+    if (r.ok) { resetForm(); load(); }
+    else setErr((await r.json()).error ?? "Gagal simpan");
+  }
+
   async function toggle(it: AutoReply) {
     await fetch(`/api/auto-replies/${it.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ active: !it.active }) });
     load();
@@ -112,7 +197,14 @@ function AutoReplyTab() {
   return (
     <div className="max-w-2xl space-y-4">
       <div className="rounded-[var(--radius-lg)] border border-border bg-white p-4">
-        <div className="mb-3 text-sm font-semibold">Aturan baru</div>
+        <div className="mb-3 flex items-center justify-between">
+          <span className="text-sm font-semibold">{editingId ? "Edit aturan" : "Aturan baru"}</span>
+          {editingId && (
+            <button type="button" onClick={resetForm} className="text-xs text-muted-foreground hover:text-foreground">
+              Batal edit
+            </button>
+          )}
+        </div>
         <div className="space-y-3">
           <div className="grid grid-cols-2 gap-3">
             <div>
@@ -137,9 +229,159 @@ function AutoReplyTab() {
             <label className="text-xs font-medium">Balasan otomatis</label>
             <textarea value={replyText} onChange={(e) => setReplyText(e.target.value)} rows={3} placeholder="Halo, berikut daftar harga kami..." className="mt-1 w-full rounded-md border border-input px-3 py-2 text-sm outline-none focus:border-primary" />
           </div>
+
+          {/* Button editor */}
+          <div>
+            <div className="mb-2 flex items-center justify-between">
+              <label className="text-xs font-medium">Tombol interaktif <span className="text-muted-foreground font-normal">(WA Cloud, maks 3)</span></label>
+              {buttons.length < 3 && (
+                <button
+                  type="button"
+                  onClick={addBtn}
+                  className="inline-flex items-center gap-1 rounded-md border border-primary px-2 py-1 text-xs font-medium text-primary hover:bg-primary-soft"
+                >
+                  <Plus className="h-3 w-3" /> Tambah tombol
+                </button>
+              )}
+            </div>
+            {buttons.length === 0 && (
+              <p className="text-xs text-muted-foreground italic">Belum ada tombol — klik &quot;Tambah tombol&quot; untuk menambah.</p>
+            )}
+            <div className="space-y-2">
+              {buttons.map((btn, i) => (
+                <div key={i} className="flex items-start gap-2 rounded-lg border border-border bg-muted/30 p-2">
+                  <select
+                    value={btn.type}
+                    onChange={(e) => updateBtn(i, { type: e.target.value as "quick_reply" | "url" | "wa", value: "", greetingText: "" })}
+                    className="h-8 rounded border border-input bg-white px-2 text-xs"
+                  >
+                    <option value="quick_reply">Teks</option>
+                    <option value="url">URL / Link</option>
+                    <option value="wa">Link WA</option>
+                  </select>
+                  <div className="flex flex-1 flex-col gap-1.5">
+                    <input
+                      value={btn.label}
+                      onChange={(e) => updateBtn(i, { label: e.target.value.slice(0, 20) })}
+                      placeholder="Label tombol (maks 20 karakter)"
+                      className="h-8 w-full rounded border border-input px-2 text-xs outline-none focus:border-primary"
+                    />
+                    {btn.type === "wa" ? (
+                      <>
+                        <input
+                          value={btn.value}
+                          onChange={(e) => updateBtn(i, { value: e.target.value })}
+                          placeholder="Nomor WA tujuan (mis. 628123456789)"
+                          className="h-8 w-full rounded border border-input px-2 text-xs outline-none focus:border-primary"
+                        />
+                        <input
+                          value={btn.greetingText ?? ""}
+                          onChange={(e) => updateBtn(i, { greetingText: e.target.value })}
+                          placeholder="Greeting otomatis saat tombol diklik (opsional)"
+                          className="h-8 w-full rounded border border-input px-2 text-xs outline-none focus:border-primary"
+                        />
+                      </>
+                    ) : (
+                      <input
+                        value={btn.value}
+                        onChange={(e) => updateBtn(i, { value: e.target.value })}
+                        placeholder={btn.type === "url" ? "https://... atau link lain" : "Teks yang dikirim saat tombol diklik"}
+                        className="h-8 w-full rounded border border-input px-2 text-xs outline-none focus:border-primary"
+                      />
+                    )}
+                  </div>
+                  <div className="mt-1 shrink-0 text-muted-foreground">
+                    {btn.type === "url" ? <Link2 className="h-4 w-4" /> : btn.type === "wa" ? <Phone className="h-4 w-4" /> : <MessageSquare className="h-4 w-4" />}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => removeBtn(i)}
+                    className="mt-1 shrink-0 rounded p-0.5 text-muted-foreground hover:text-danger"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+              ))}
+            </div>
+            {(buttons.some((b) => b.type === "url" || b.type === "wa")) && buttons.some((b) => b.type === "quick_reply") && (
+              <p className="mt-1 text-xs text-warning">Tombol URL/WA dan Teks tidak bisa dicampur — WhatsApp hanya akan mengirim tombol URL.</p>
+            )}
+          </div>
+
+          {/* Channel filter */}
+          <div>
+            <label className="text-xs font-medium">Berlaku untuk channel</label>
+            <p className="mb-1.5 text-[11px] text-muted-foreground">Kosong = berlaku di semua channel</p>
+            <div className="flex flex-wrap gap-2">
+              {CHANNEL_OPTIONS.map((opt) => (
+                <label key={opt.value} className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-border bg-muted/30 px-2.5 py-1.5 text-xs hover:bg-muted">
+                  <input
+                    type="checkbox"
+                    checked={channels.includes(opt.value)}
+                    onChange={(e) =>
+                      setChannels((prev) =>
+                        e.target.checked ? [...prev, opt.value] : prev.filter((c) => c !== opt.value)
+                      )
+                    }
+                    className="h-3 w-3 accent-primary"
+                  />
+                  {opt.label}
+                </label>
+              ))}
+            </div>
+          </div>
+
+          {/* Jeda & AI Rephrase */}
+          <div className="rounded-lg border border-border bg-muted/20 p-3 space-y-3">
+            <div className="text-xs font-medium text-foreground">Pengaturan anti-bot</div>
+            <div className="flex items-center gap-3">
+              <label className="inline-flex cursor-pointer items-center gap-2 text-xs">
+                <div
+                  onClick={() => setAiRephrase((v) => !v)}
+                  className={`relative h-5 w-9 rounded-full transition-colors cursor-pointer ${aiRephrase ? "bg-primary" : "bg-muted-foreground/30"}`}
+                >
+                  <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform ${aiRephrase ? "translate-x-4" : "translate-x-0.5"}`} />
+                </div>
+                <span>Variasi teks via AI</span>
+              </label>
+              {aiRephrase && <span className="text-[11px] text-muted-foreground">Pesan diparafrase otomatis tiap kirim</span>}
+            </div>
+            <div>
+              <label className="text-xs font-medium">Jeda pengiriman (detik)</label>
+              <p className="mb-1.5 text-[11px] text-muted-foreground">Sistem tunggu waktu acak antara min–maks sebelum kirim. Isi 0 = langsung kirim.</p>
+              <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1">
+                  <span className="text-xs text-muted-foreground">Min</span>
+                  <input
+                    type="number" min={0} max={300} value={delayMin}
+                    onChange={(e) => { const v = Math.max(0, Number(e.target.value)); setDelayMin(v); if (delayMax < v) setDelayMax(v); }}
+                    className="h-8 w-16 rounded border border-input px-2 text-xs outline-none focus:border-primary"
+                  />
+                </div>
+                <span className="text-xs text-muted-foreground">–</span>
+                <div className="flex items-center gap-1">
+                  <span className="text-xs text-muted-foreground">Maks</span>
+                  <input
+                    type="number" min={delayMin} max={300} value={delayMax}
+                    onChange={(e) => setDelayMax(Math.max(delayMin, Number(e.target.value)))}
+                    className="h-8 w-16 rounded border border-input px-2 text-xs outline-none focus:border-primary"
+                  />
+                </div>
+                <span className="text-xs text-muted-foreground">detik</span>
+                {(delayMin > 0 || delayMax > 0) && (
+                  <span className="text-[11px] text-primary">≈ {delayMin}–{delayMax} dtk jeda acak</span>
+                )}
+              </div>
+            </div>
+          </div>
+
           {err && <div className="rounded-md bg-danger/10 px-3 py-2 text-sm text-danger">{err}</div>}
-          <button onClick={add} disabled={busy || !name.trim()} className="inline-flex h-10 items-center gap-1 rounded-md bg-primary px-4 text-sm font-medium text-white hover:bg-primary-dark disabled:opacity-50">
-            <Plus className="h-4 w-4" /> Simpan aturan
+          <button
+            onClick={editingId ? save : add}
+            disabled={busy || !name.trim()}
+            className="inline-flex h-10 items-center gap-1 rounded-md bg-primary px-4 text-sm font-medium text-white hover:bg-primary-dark disabled:opacity-50"
+          >
+            <Plus className="h-4 w-4" /> {editingId ? "Update aturan" : "Simpan aturan"}
           </button>
         </div>
       </div>
@@ -162,8 +404,38 @@ function AutoReplyTab() {
                 </div>
               )}
               {it.replyText && <p className="mt-1 truncate text-sm text-muted-foreground">{it.replyText}</p>}
+              {it.buttons && it.buttons.length > 0 && (
+                <div className="mt-1 flex flex-wrap gap-1">
+                  {it.buttons.map((b, i) => (
+                    <span key={i} className="inline-flex items-center gap-1 rounded border border-primary-soft bg-primary-soft px-1.5 py-0.5 text-[11px] font-medium text-primary-dark">
+                      {b.type === "url" ? <Link2 className="h-2.5 w-2.5" /> : <MessageSquare className="h-2.5 w-2.5" />}
+                      {b.label}
+                    </span>
+                  ))}
+                </div>
+              )}
+              {it.channels && it.channels.length > 0 && (
+                <div className="mt-1 flex flex-wrap gap-1">
+                  {it.channels.map((ch) => (
+                    <span key={ch} className="rounded bg-blue-50 px-1.5 py-0.5 text-[11px] font-medium text-blue-700">
+                      {CHANNEL_OPTIONS.find((o) => o.value === ch)?.label ?? ch}
+                    </span>
+                  ))}
+                </div>
+              )}
+              <div className="mt-1 flex flex-wrap gap-1">
+                {it.aiRephrase && (
+                  <span className="rounded bg-purple-50 px-1.5 py-0.5 text-[11px] font-medium text-purple-700">✦ Variasi AI</span>
+                )}
+                {(it.delayMin > 0 || it.delayMax > 0) && (
+                  <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[11px] font-medium text-amber-700">⏱ {it.delayMin}–{it.delayMax} dtk</span>
+                )}
+              </div>
             </div>
             <div className="flex items-center gap-1">
+              <button onClick={() => startEdit(it)} className="rounded p-1 text-muted-foreground hover:bg-primary/10 hover:text-primary">
+                <Pencil className="h-4 w-4" />
+              </button>
               <button onClick={() => toggle(it)} className="rounded px-2 py-1 text-xs font-medium text-muted-foreground hover:bg-muted">
                 {it.active ? "Matikan" : "Aktifkan"}
               </button>

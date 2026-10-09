@@ -41,7 +41,7 @@ export async function GET(req: Request) {
     where,
     orderBy: { scheduledAt: "asc" },
     include: {
-      customer: { select: { id: true, name: true, externalId: true } },
+      customer: { select: { id: true, name: true, externalId: true, tags: true } },
       assignedTo: { select: { name: true } },
     },
   });

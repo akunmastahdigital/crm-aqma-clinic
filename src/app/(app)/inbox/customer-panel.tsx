@@ -1,12 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { X, Tag as TagIcon, KanbanSquare, Trash2, BookOpen, Sparkles, Lightbulb, Copy, Check, Loader2, Plus, Send, Brain } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { X, Tag as TagIcon, KanbanSquare, Trash2, BookOpen, Sparkles, Lightbulb, Copy, Check, Loader2, Plus, Send, Brain, Merge } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AudienceProfilePanel } from "@/components/audience-profile-panel";
 
 type Customer = {
-  id: string; name: string | null; phone: string | null; externalId: string;
+  id: string; name: string | null; phone: string | null; externalId: string; channel: string;
   tags: string[]; note: string | null; score: number; assignedToId: string | null;
 };
 type Deal = { id: string; title: string; value: number | null; pipelineId: string; stageId: string; stage: { name: string; color: string | null } };
@@ -25,6 +25,28 @@ const MONTHS = [
 ];
 const currentYear = new Date().getFullYear();
 const YEARS = [currentYear, currentYear + 1, currentYear + 2];
+
+function formatPhone(raw: string): string {
+  const d = raw.replace(/\D/g, "");
+  if (!d) return raw;
+  if (d.startsWith("62") && d.length >= 10) {
+    const local = d.slice(2);
+    const parts: string[] = [];
+    if (local.length >= 3) parts.push(local.slice(0, 3));
+    if (local.length >= 7) parts.push(local.slice(3, 7));
+    if (local.length >= 7) parts.push(local.slice(7));
+    return "+62 " + parts.join("-");
+  }
+  return d.length >= 8 ? "+" + d : d;
+}
+
+function displayCustomer(c: { name: string | null; phone: string | null; externalId: string; channel?: string }): string {
+  if (c.name) return c.name;
+  if (c.channel === "INSTAGRAM") return `@${c.externalId}`;
+  if (c.channel === "MESSENGER") return `FB:${c.externalId.slice(-6)}`;
+  if (c.phone) return formatPhone(c.phone);
+  return formatPhone(c.externalId);
+}
 
 function formatRpFull(n: number) {
   return `Rp ${n.toLocaleString("id-ID")}`;
@@ -89,6 +111,50 @@ export function CustomerPanel({
   const [savingNote, setSavingNote] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
 
+  // Duplikat otomatis terdeteksi
+  const [autoDuplicates, setAutoDuplicates] = useState<{ id: string; name: string | null; phone: string | null; externalId: string; channel: string; tags: string[] }[]>([]);
+
+  // Merge lead
+  const [showMerge, setShowMerge] = useState(false);
+  const [mergeQuery, setMergeQuery] = useState("");
+  const [mergeResults, setMergeResults] = useState<{ id: string; name: string | null; phone: string | null; externalId: string; channel: string; tags: string[] }[]>([]);
+  const [mergeSearching, setMergeSearching] = useState(false);
+  const [merging, setMerging] = useState(false);
+  const mergeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (!showMerge || !mergeQuery.trim()) { setMergeResults([]); return; }
+    if (mergeTimer.current) clearTimeout(mergeTimer.current);
+    mergeTimer.current = setTimeout(async () => {
+      setMergeSearching(true);
+      const r = await fetch(`/api/customers?q=${encodeURIComponent(mergeQuery)}&limit=8`).catch(() => null);
+      const d = r?.ok ? await r.json() : null;
+      setMergeResults((d?.customers ?? []).filter((x: { id: string }) => x.id !== customerId));
+      setMergeSearching(false);
+    }, 400);
+  }, [mergeQuery, showMerge, customerId]);
+
+  async function doMerge(secondaryId: string, secondaryName: string | null) {
+    if (!confirm(`Gabungkan "${secondaryName ?? secondaryId}" ke lead ini?\n\nSemua percakapan, jurnal, dan history akan dipindah. Lead duplikat akan dihapus. Tindakan ini tidak bisa dibatalkan.`)) return;
+    setMerging(true);
+    const r = await fetch("/api/customers/merge", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ primaryId: customerId, secondaryId }),
+    });
+    setMerging(false);
+    if (r.ok) {
+      setShowMerge(false);
+      setMergeQuery("");
+      setAutoDuplicates([]);
+      load();
+      onUpdated();
+    } else {
+      const d = await r.json();
+      alert(d.error ?? "Gagal menggabungkan lead");
+    }
+  }
+
   // Paket & potensi
   const [packageTypes, setPackageTypes] = useState<PackageType[]>([]);
   const [pkgTypeId, setPkgTypeId] = useState("");
@@ -129,6 +195,9 @@ export function CustomerPanel({
     }
     const ra = await fetch(`/api/inbox/conversations/${conversationId}/agents`).catch(() => null);
     if (ra?.ok) { const da = await ra.json(); setConvAgents(da.agents ?? []); }
+    // Deteksi duplikat otomatis by nama di channel berbeda
+    const rd = await fetch(`/api/customers/duplicates?id=${customerId}`).catch(() => null);
+    if (rd?.ok) { const dd = await rd.json(); setAutoDuplicates(dd.duplicates ?? []); }
   }, [customerId, conversationId]);
 
   useEffect(() => {
@@ -288,6 +357,14 @@ export function CustomerPanel({
             <Brain className="h-3.5 w-3.5" />
             Profiling Audience
           </button>
+          <button
+            onClick={() => { setShowMerge(true); setMergeQuery(""); setMergeResults([]); }}
+            title="Gabungkan Lead Duplikat"
+            className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-orange-600 hover:bg-orange-50 transition-colors"
+          >
+            <Merge className="h-3.5 w-3.5" />
+            Gabung
+          </button>
           <button onClick={onClose} className="text-muted-foreground hover:text-foreground ml-1"><X className="h-4 w-4" /></button>
         </div>
       </div>
@@ -296,7 +373,7 @@ export function CustomerPanel({
         {/* Nama & nomor */}
         <div className="flex items-center gap-3">
           <div className="flex h-11 w-11 items-center justify-center rounded-full bg-primary-soft text-base font-semibold text-primary-dark">
-            {(c.name ?? c.externalId).charAt(0).toUpperCase()}
+            {displayCustomer(c).charAt(0).toUpperCase()}
           </div>
           <div className="min-w-0 flex-1">
             <input
@@ -309,6 +386,25 @@ export function CustomerPanel({
             <div className="px-1 text-xs text-muted-foreground">{c.phone ?? c.externalId}</div>
           </div>
         </div>
+
+        {/* Banner duplikat otomatis */}
+        {autoDuplicates.length > 0 && autoDuplicates.map(dup => (
+          <div key={dup.id} className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
+            <div className="text-xs font-medium text-amber-700 mb-1">⚠️ Mungkin lead yang sama</div>
+            <div className="text-xs text-amber-800">
+              <span className="font-medium">{dup.name}</span>
+              <span className="text-amber-600"> · {dup.channel.replace("WA_CLOUD","WA Cloud").replace("WA_QR","WA QR Biasa")} · {dup.phone ?? dup.externalId}</span>
+            </div>
+            {dup.tags.length > 0 && <div className="text-xs text-amber-600 mt-0.5">Label: {dup.tags.join(", ")}</div>}
+            <button
+              disabled={merging}
+              onClick={() => doMerge(dup.id, dup.name)}
+              className="mt-2 w-full rounded-md bg-amber-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-600 transition-colors disabled:opacity-50"
+            >
+              {merging ? "Menggabungkan..." : "Gabungkan sekarang (1 klik)"}
+            </button>
+          </div>
+        ))}
 
         {/* Penanggung jawab */}
         <div>
@@ -703,7 +799,7 @@ export function CustomerPanel({
         <AddDeal
           pipelines={pipelines.filter((p) => !deals.some((d) => d.pipelineId === p.id))}
           customerId={customerId}
-          defaultTitle={c.name ?? c.externalId}
+          defaultTitle={displayCustomer(c)}
           onClose={() => setShowDeal(false)}
           onDone={() => { setShowDeal(false); load(); onUpdated(); }}
         />
@@ -712,7 +808,7 @@ export function CustomerPanel({
       {showProfile && (
         <AudienceProfilePanel
           customerId={customerId}
-          customerName={c.name ?? c.externalId}
+          customerName={displayCustomer(c)}
           onClose={() => setShowProfile(false)}
         />
       )}
@@ -751,6 +847,63 @@ export function CustomerPanel({
               >
                 {stageSaving ? "Menyimpan..." : "Simpan"}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Gabungkan Lead */}
+      {showMerge && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setShowMerge(false)}>
+          <div className="w-[420px] max-w-[calc(100vw-2rem)] rounded-xl bg-white shadow-xl" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between border-b border-border px-4 py-3">
+              <span className="font-semibold text-sm">Gabungkan Lead Duplikat</span>
+              <button onClick={() => setShowMerge(false)}><X className="h-4 w-4 text-muted-foreground" /></button>
+            </div>
+            <div className="p-4 space-y-3">
+              {/* Primary (current) */}
+              <div className="rounded-lg bg-orange-50 border border-orange-200 px-3 py-2 text-sm">
+                <div className="text-xs text-orange-600 font-medium mb-0.5">Lead ini (utama — tetap ada)</div>
+                <div className="font-medium">{c?.name ?? "—"}</div>
+                <div className="text-xs text-muted-foreground">{c?.phone ?? c?.externalId} · {c?.channel}</div>
+              </div>
+
+              <div className="text-xs text-muted-foreground text-center">+ gabungkan dengan</div>
+
+              {/* Search */}
+              <input
+                autoFocus
+                value={mergeQuery}
+                onChange={e => setMergeQuery(e.target.value)}
+                placeholder="Cari nama atau nomor lead duplikat..."
+                className="w-full rounded-md border border-input px-3 py-2 text-sm outline-none focus:border-primary"
+              />
+
+              {mergeSearching && <div className="text-xs text-center text-muted-foreground py-2">Mencari...</div>}
+
+              {mergeResults.length > 0 && (
+                <div className="space-y-1 max-h-48 overflow-y-auto">
+                  {mergeResults.map(r => (
+                    <button
+                      key={r.id}
+                      disabled={merging}
+                      onClick={() => doMerge(r.id, r.name)}
+                      className="w-full text-left rounded-lg border border-border px-3 py-2 text-sm hover:bg-muted transition-colors disabled:opacity-50"
+                    >
+                      <div className="font-medium">{r.name ?? "—"}</div>
+                      <div className="text-xs text-muted-foreground">{r.phone ?? r.externalId} · {r.channel} · {r.tags.join(", ") || "belum ada label"}</div>
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {!mergeSearching && mergeQuery.trim() && mergeResults.length === 0 && (
+                <div className="text-xs text-center text-muted-foreground py-2">Lead tidak ditemukan</div>
+              )}
+
+              <div className="text-xs text-muted-foreground bg-muted rounded-md px-3 py-2">
+                ⚠️ Semua percakapan, jurnal, label, pipeline dari lead duplikat akan dipindah ke lead ini. Lead duplikat akan dihapus permanen.
+              </div>
             </div>
           </div>
         </div>

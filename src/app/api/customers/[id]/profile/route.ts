@@ -56,7 +56,7 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
     `Tag: ${customer.tags.join(", ") || "belum ada"}`,
     customer.note ? `Catatan internal: ${customer.note}` : null,
     customer.packageType ? `Minat paket: ${customer.packageType.name}${customer.packageVariant ? " – " + customer.packageVariant.name : ""}` : null,
-    customer.packageMonth && customer.packageYear ? `Bulan keberangkatan: ${customer.packageMonth}/${customer.packageYear}` : null,
+    customer.packageMonth && customer.packageYear ? `Target bulan treatment: ${customer.packageMonth}/${customer.packageYear}` : null,
     customer.potentialValue ? `Estimasi nilai: Rp ${customer.potentialValue.toLocaleString("id-ID")}` : null,
     customer.assignedTo ? `Agent: ${customer.assignedTo.name}` : null,
   ].filter(Boolean).join("\n");

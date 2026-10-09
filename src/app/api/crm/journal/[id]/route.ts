@@ -39,6 +39,19 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     },
   });
 
+  // Sync ke FollowUp: kalau status DONE, tandai FollowUp yg cocok (customerId + scheduledAt ±1 mnt) sebagai DONE juga
+  if (status === "DONE" && entry.scheduledAt) {
+    const t = entry.scheduledAt;
+    await prisma.followUp.updateMany({
+      where: {
+        customerId: entry.customerId,
+        status: "PENDING",
+        scheduledAt: { gte: new Date(t.getTime() - 60000), lte: new Date(t.getTime() + 60000) },
+      },
+      data: { status: "DONE", doneAt: new Date() },
+    });
+  }
+
   // Sync label ke customer jika label diubah
   if (label !== undefined && label) {
     await prisma.customer.update({ where: { id: entry.customerId }, data: { tags: [label], leadStatus: label } });

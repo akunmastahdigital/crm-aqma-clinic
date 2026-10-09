@@ -19,6 +19,7 @@ export async function GET(req: Request) {
   const label = sp.get("label");
   const status = sp.get("status");
   const customerId = sp.get("customerId");
+  const activityType = sp.get("activityType");
   const q = sp.get("q")?.trim();
 
   const where: Record<string, unknown> = {};
@@ -27,6 +28,7 @@ export async function GET(req: Request) {
   if (customerId) where.customerId = customerId;
   if (label) where.label = label;
   if (status) where.status = status;
+  if (activityType) where.activityType = activityType;
   if (q) {
     const digits = q.replace(/\D/g, "");
     where.customer = {
@@ -59,18 +61,55 @@ export async function GET(req: Request) {
   ]);
 
   // Widget counts
-  const todayStart = new Date(new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Jakarta" }) + "T00:00:00+07:00");
-  const todayEnd = new Date(new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Jakarta" }) + "T23:59:59+07:00");
+  const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Jakarta" });
+  const todayStart = new Date(todayStr + "T00:00:00+07:00");
+  const todayEnd   = new Date(todayStr + "T23:59:59+07:00");
   const now = new Date();
   const agentFilter = session.role === "AGENT" ? { userId: session.uid } : {};
 
-  const [fuToday, overdue, actToday] = await Promise.all([
+  // Widget date range (terpisah dari filter list)
+  const widgetFrom = sp.get("widgetFrom");
+  const widgetTo   = sp.get("widgetTo");
+  const wStart = widgetFrom ? new Date(widgetFrom + "T00:00:00+07:00") : todayStart;
+  const wEnd   = widgetTo   ? new Date(widgetTo   + "T23:59:59+07:00") : todayEnd;
+
+  const [fuToday, overdue, actByTypeRaw, fuTodayByAgent, overdueByAgent, actByAgent] = await Promise.all([
     prisma.salesJournal.count({ where: { ...agentFilter, scheduledAt: { gte: todayStart, lte: todayEnd }, status: "PENDING" } }),
     prisma.salesJournal.count({ where: { ...agentFilter, scheduledAt: { lt: now }, status: "PENDING" } }),
-    prisma.salesJournal.count({ where: { ...agentFilter, createdAt: { gte: todayStart } } }),
+    prisma.salesJournal.groupBy({ by: ["activityType"], where: { ...agentFilter, date: { gte: wStart, lte: wEnd } }, _count: { _all: true } }),
+    session.role !== "AGENT" ? prisma.salesJournal.groupBy({ by: ["userId"], where: { scheduledAt: { gte: todayStart, lte: todayEnd }, status: "PENDING" }, _count: { _all: true } }) : Promise.resolve([]),
+    session.role !== "AGENT" ? prisma.salesJournal.groupBy({ by: ["userId"], where: { scheduledAt: { lt: now }, status: "PENDING" }, _count: { _all: true } }) : Promise.resolve([]),
+    session.role !== "AGENT" ? prisma.salesJournal.groupBy({ by: ["userId"], where: { date: { gte: wStart, lte: wEnd } }, _count: { _all: true } }) : Promise.resolve([]),
   ]);
 
-  return NextResponse.json({ items, total, take, skip, widgets: { fuToday, overdue, actToday } });
+  const actByType: Record<string, number> = {};
+  for (const r of actByTypeRaw as Array<{ activityType: string; _count: { _all: number } }>) {
+    actByType[r.activityType] = r._count._all;
+  }
+  const actTotal = Object.values(actByType).reduce((s, v) => s + v, 0);
+
+  let agentBreakdown: Array<{ userId: string; name: string; fuToday: number; overdue: number; actToday: number }> = [];
+  if (session.role !== "AGENT") {
+    const allUserIds = new Set([
+      ...fuTodayByAgent.map((r: { userId: string }) => r.userId),
+      ...overdueByAgent.map((r: { userId: string }) => r.userId),
+      ...(actByAgent as Array<{ userId: string }>).map(r => r.userId),
+    ]);
+    const users = await prisma.user.findMany({ where: { id: { in: Array.from(allUserIds) } }, select: { id: true, name: true } });
+    const nameMap = Object.fromEntries(users.map(u => [u.id, u.name]));
+    const fuMap = Object.fromEntries(fuTodayByAgent.map((r: { userId: string; _count: { _all: number } }) => [r.userId, r._count._all]));
+    const odMap = Object.fromEntries(overdueByAgent.map((r: { userId: string; _count: { _all: number } }) => [r.userId, r._count._all]));
+    const acMap = Object.fromEntries((actByAgent as Array<{ userId: string; _count: { _all: number } }>).map(r => [r.userId, r._count._all]));
+    agentBreakdown = Array.from(allUserIds).map(uid => ({
+      userId: uid,
+      name: nameMap[uid] ?? uid,
+      fuToday: (fuMap as Record<string, number>)[uid] ?? 0,
+      overdue: (odMap as Record<string, number>)[uid] ?? 0,
+      actToday: (acMap as Record<string, number>)[uid] ?? 0,
+    })).sort((a, b) => b.actToday - a.actToday);
+  }
+
+  return NextResponse.json({ items, total, take, skip, widgets: { fuToday, overdue, actTotal, actByType }, agentBreakdown });
 }
 
 export async function POST(req: Request) {

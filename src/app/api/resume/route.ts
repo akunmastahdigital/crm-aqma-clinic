@@ -3,7 +3,6 @@ import { getSession } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { getAiSettings } from "@/lib/ai";
 import { callBridge } from "@/lib/ai-bridge";
-import { callCodexExec } from "@/lib/codex-exec";
 
 export const dynamic = "force-dynamic";
 
@@ -115,53 +114,56 @@ Catatan:
 TRANSKRIP PERCAKAPAN:
 ${transcript}`;
 
-  // Panggil AI via Codex exec (non-interaktif, pakai ChatGPT Plus di server)
-  // Fallback ke AI settings jika Codex gagal
+  // Panggil AI — bridge (Claude/ChatGPT/Gemini) atau BYOK
   let rawResult: string;
   try {
-    try {
-      rawResult = await callCodexExec(prompt);
-    } catch (codexErr) {
-      // Fallback ke AI settings biasa jika Codex gagal
-      console.error("[Resume AI] Codex exec failed, fallback:", codexErr);
-      const aiSettings = await getAiSettings();
-      if (aiSettings.bridgeEnabled) {
-        rawResult = await callBridge(aiSettings, "", [], prompt);
-      } else {
-        const key = aiSettings.provider === "platform" ? process.env.AI_PLATFORM_KEY : aiSettings.apiKey;
-        if (!key) throw new Error(`Codex exec gagal: ${String(codexErr)}. API key AI juga belum diatur.`);
-        const base = (aiSettings.provider === "platform"
-          ? process.env.AI_PLATFORM_BASE_URL
-          : aiSettings.apiBaseUrl) || "https://api.openai.com/v1";
-        const res = await fetch(base.replace(/\/$/, "") + "/chat/completions", {
-          method: "POST",
-          headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
-          body: JSON.stringify({
-            model: aiSettings.model,
-            temperature: 0.3,
-            messages: [{ role: "user", content: prompt }],
-          }),
-        });
-        if (!res.ok) throw new Error(`AI error ${res.status}`);
-        const data = await res.json();
-        rawResult = (data.choices?.[0]?.message?.content ?? "").trim();
-      }
+    const aiSettings = await getAiSettings();
+    if (aiSettings.bridgeEnabled) {
+      rawResult = await callBridge(aiSettings, "", [], prompt);
+    } else {
+      const key = aiSettings.provider === "platform" ? process.env.AI_PLATFORM_KEY : aiSettings.apiKey;
+      if (!key) throw new Error("API key AI belum diatur. Hubungkan AI di menu Pengaturan → AI.");
+      const base = (aiSettings.provider === "platform"
+        ? process.env.AI_PLATFORM_BASE_URL
+        : aiSettings.apiBaseUrl) || "https://api.openai.com/v1";
+      const res = await fetch(base.replace(/\/$/, "") + "/chat/completions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+        body: JSON.stringify({
+          model: aiSettings.model,
+          temperature: 0.3,
+          messages: [{ role: "user", content: prompt }],
+        }),
+      });
+      if (!res.ok) throw new Error(`AI error ${res.status}`);
+      const data = await res.json();
+      rawResult = (data.choices?.[0]?.message?.content ?? "").trim();
     }
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 });
   }
 
-  // Parse JSON dari respons AI
+  // Parse JSON dari respons AI — ekstrak { } block jika ada teks di sekitarnya
+  function extractJson(raw: string): unknown {
+    // Coba parse langsung dulu
+    const direct = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+    try { return JSON.parse(direct); } catch {}
+    // Cari blok ```json ... ``` dalam teks
+    const blockMatch = raw.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+    if (blockMatch) try { return JSON.parse(blockMatch[1].trim()); } catch {}
+    // Cari { ... } terluar dalam teks
+    const start = raw.indexOf("{");
+    const end = raw.lastIndexOf("}");
+    if (start !== -1 && end > start) try { return JSON.parse(raw.slice(start, end + 1)); } catch {}
+    throw new Error("JSON tidak ditemukan dalam respons AI");
+  }
+
   let result: unknown;
   try {
-    // Hapus markdown code block jika ada
-    const cleaned = rawResult.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
-    result = JSON.parse(cleaned);
+    result = extractJson(rawResult);
   } catch (parseErr) {
     console.error("[Resume AI] JSON parse error:", String(parseErr));
-    console.error("[Resume AI] rawResult length:", rawResult?.length);
     console.error("[Resume AI] rawResult first 800:", rawResult?.slice(0, 800));
-    console.error("[Resume AI] rawResult last 300:", rawResult?.slice(-300));
     return NextResponse.json({ error: "Respons AI tidak valid. Coba lagi." }, { status: 500 });
   }
 

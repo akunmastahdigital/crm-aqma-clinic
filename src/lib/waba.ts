@@ -164,6 +164,65 @@ export async function sendWabaMedia(
   return { data, id: sentId(data) };
 }
 
+export type WaButton =
+  | { type: "quick_reply"; label: string; value: string }
+  | { type: "url"; label: string; value: string };
+
+// Kirim pesan interaktif dengan tombol (WA Cloud API).
+// quick_reply: sampai 3 tombol teks → interactive.type="button"
+// url: 1 tombol link → interactive.type="cta_url"
+export async function sendWabaInteractive(
+  phoneNumberId: string,
+  to: string,
+  bodyText: string,
+  buttons: WaButton[],
+  token: string,
+  replyToWamid?: string | null,
+) {
+  const hasUrl = buttons.some((b) => b.type === "url");
+  let interactive: Record<string, unknown>;
+
+  if (hasUrl) {
+    const btn = buttons.find((b) => b.type === "url")!;
+    interactive = {
+      type: "cta_url",
+      body: { text: bodyText },
+      action: {
+        name: "cta_url",
+        parameters: { display_text: btn.label.slice(0, 20), url: btn.value },
+      },
+    };
+  } else {
+    interactive = {
+      type: "button",
+      body: { text: bodyText },
+      action: {
+        buttons: buttons.slice(0, 3).map((b, i) => ({
+          type: "reply",
+          reply: { id: String(i + 1), title: b.label.slice(0, 20) },
+        })),
+      },
+    };
+  }
+
+  const res = await fetch(`${GRAPH}/${phoneNumberId}/messages`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify({
+      messaging_product: "whatsapp",
+      recipient_type: "individual",
+      to,
+      type: "interactive",
+      interactive,
+      ...(replyToWamid ? { context: { message_id: replyToWamid } } : {}),
+    }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok)
+    throw new Error(`WABA interactive ${res.status}: ${JSON.stringify(data).slice(0, 300)}`);
+  return { data, id: sentId(data) };
+}
+
 // Unduh media masuk dari WhatsApp Cloud API (2 langkah: ambil URL, lalu unduh biner).
 export async function downloadWabaMedia(
   mediaId: string,

@@ -71,7 +71,7 @@ export function OverdueAlerts() {
   }
 
   return (
-    <div className="fixed top-4 left-1/2 z-50 -translate-x-1/2 flex flex-col gap-2 w-[420px] max-w-[calc(100vw-2rem)]">
+    <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 w-[420px] max-w-[calc(100vw-2rem)]">
       {visible.map((item) => (
         <div
           key={item.conversationId}

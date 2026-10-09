@@ -148,6 +148,55 @@ TEMUAN: muncul file .secrets/deploy-credentials.txt di folder project
 dalam bentuk plaintext. File itu TIDAK ikut di-commit — saya unstage lalu
 tambahkan /.secrets ke .gitignore. Filenya tetap ada di disk, tidak saya hapus.
 
+## 2026-10-09 — Sesi 5: port 42 commit update dari Taiba
+
+Instruksi operator: cek update di repo Taiba, lalu implementasi & sesuaikan
+dengan bisnis klinik.
+
+Upstream maju 42 commit (9fa402d -> 9dc52d9), 62 file, ~3.740 baris.
+Di-port lewat 3-way merge (git apply --3way), BUKAN salin manual, supaya
+perubahan khas Aqma tidak tertimpa. Riwayat commit Taiba sengaja tidak
+di-merge supaya data klien lain tidak ikut masuk ke repo Aqma.
+Hanya 2 konflik (WA QR), sudah diselesaikan.
+
+Catatan lengkap: docs/update-dari-taiba-okt2026.md
+
+Fitur masuk: dasbor closing+omzet & tren 7 hari & performa tim, Laporan Bulanan
+per label (menu baru /report), deteksi + gabung lead duplikat lintas channel,
+status ceklis WA, auto-assign agent, automasi (tombol interaktif, filter
+channel, variasi AI + jeda acak), ganti password sendiri, label di Follow Up.
+
+Disesuaikan ke klinik: kamus topik laporan bulanan aslinya untuk klinik GIGI
+(tambal/cabut/scaling/behel/veneer) — diganti ke treatment kecantikan
+(jerawat, flek, laser, botox, filler, facial, dll). Deteksi keberatan BPJS
+diganti jadi keberatan harga/cicilan/takut efek samping/izin pasangan.
+Istilah dasbor & warna dipindah ke palet Aqma.
+
+6 bug upstream diperbaiki, 3 di antaranya serius:
+- api/customers/merge TANPA pengecekan izin sama sekali — VIEWER pun bisa
+  menghapus pasien permanen. Ditambah guard isReadOnly().
+- merge kehilangan closedAt, potentialQty*, source, konektorId dll saat
+  menggabungkan -> laporan closing bisa meleset. Sekarang ikut dipindah.
+- api/broadcast/[id] query relasi yang tidak ada di schema -> halaman detail
+  broadcast pasti error. Diganti query terpisah.
+
+Helper baru src/lib/rbac.ts isReadOnly(). BARU dipakai di route merge;
+route lain yang mengubah data belum — perlu disapu menyeluruh nanti.
+
+MEDIA_DIR dipindah dari /var/www/... ke dalam folder project (web root
+bersama milik klien lain). Konsekuensinya nginx perlu blok location /uploads/
+sebelum upload media bisa dibuka di browser.
+
+Build lolos. 11 error TypeScript bawaan Taiba masih ada (tidak menghalangi).
+
+BELUM BISA DIPAKAI:
+- WA QR via WAHA: butuh container Docker, saya tidak boleh menjalankan Docker.
+- Widget web chat: public/widget.js tidak ada di repo Taiba juga.
+- Upload media: butuh blok nginx location /uploads/.
+
+PERLU DEPLOY: ada perubahan schema (semua additive, tidak ada kolom dihapus),
+jadi butuh npm run db:push lewat scripts/deploy_aqma.sh — operator yang jalankan.
+
 MASIH PERLU DIKONFIRMASI OPERATOR:
 - Daftar treatment & struktur harga Aqma yang sebenarnya (pemetaan paket sesi
   1x/3x/6x/12x saat ini ASUMSI saya, bukan data asli).

@@ -10,9 +10,21 @@ export async function POST(
   if (!session) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   if (session.role === "GUEST") return NextResponse.json({ error: "forbidden" }, { status: 403 });
   const { id } = await params;
-  await prisma.followUp.update({
+  const fu = await prisma.followUp.update({
     where: { id },
     data: { status: "DONE", doneAt: new Date() },
   });
+
+  // Sync ke SalesJournal: tandai journal yg cocok (customerId + scheduledAt ±1 mnt) sebagai DONE juga
+  const t = fu.scheduledAt;
+  await prisma.salesJournal.updateMany({
+    where: {
+      customerId: fu.customerId,
+      status: { in: ["PENDING", "RESCHEDULE"] },
+      scheduledAt: { gte: new Date(t.getTime() - 60000), lte: new Date(t.getTime() + 60000) },
+    },
+    data: { status: "DONE" },
+  });
+
   return NextResponse.json({ ok: true });
 }

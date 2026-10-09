@@ -92,6 +92,16 @@ export const ROLE_ABILITIES: Record<Role, Ability[]> = {
   ],
 };
 
+// Role yang hanya boleh melihat. Sengaja dipisah dari ROLE_ABILITIES:
+// GUEST & VIEWER memang diberi ability seluas OWNER supaya tampilan menunya sama,
+// jadi matrix ability TIDAK bisa dipakai untuk memblokir aksi mereka.
+// Setiap handler yang mengubah atau menghapus data WAJIB memanggil isReadOnly().
+const READ_ONLY_ROLES: Role[] = ["GUEST", "VIEWER"];
+
+export function isReadOnly(role: Role): boolean {
+  return READ_ONLY_ROLES.includes(role);
+}
+
 export function can(role: Role, ability: Ability): boolean {
   return ROLE_ABILITIES[role]?.includes(ability) ?? false;
 }

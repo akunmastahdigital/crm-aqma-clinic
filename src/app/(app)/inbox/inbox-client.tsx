@@ -8,6 +8,32 @@ import { CHANNEL_META } from "@/lib/channel-meta";
 import { relativeTime, windowState, clockTime, dateLabel, cardDate, isSameDay } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
+// Format nomor WA: "6281234567890" → "+62 812-3456-7890"
+function formatPhone(phone: string): string {
+  const d = phone.replace(/\D/g, "");
+  if (!d) return phone;
+  if (d.startsWith("62") && d.length >= 10) {
+    const local = d.slice(2); // buang 62
+    // Format: +62 xxx-xxxx-xxxx(x)
+    const parts: string[] = [];
+    if (local.length >= 3) parts.push(local.slice(0, 3));
+    if (local.length >= 7) parts.push(local.slice(3, 7));
+    if (local.length >= 7) parts.push(local.slice(7));
+    return "+62 " + parts.join("-");
+  }
+  return "+" + d;
+}
+
+function displayName(customer: { name: string | null; externalId: string; channel: string }): string {
+  if (customer.name) return customer.name;
+  if (customer.channel === "WA_QR" || customer.channel === "WA_CLOUD") {
+    return formatPhone(customer.externalId);
+  }
+  if (customer.channel === "INSTAGRAM") return `@${customer.externalId}`;
+  if (customer.channel === "MESSENGER") return `FB:${customer.externalId.slice(-6)}`;
+  return customer.externalId;
+}
+
 function nameColor(name: string): string {
   const palette = ["#ef4444","#f97316","#eab308","#22c55e","#06b6d4","#6366f1","#a855f7","#ec4899"];
   let h = 0;
@@ -19,6 +45,7 @@ type Conv = {
   id: string;
   customerId: string;
   unread: number;
+  channel: keyof typeof CHANNEL_META;
   channelAccountId: string | null;
   lastMessageText: string | null;
   lastMessageAt: string | null;
@@ -35,7 +62,7 @@ function replyStatus(c: Conv): ReplyStatus {
   if (c.messages[0]?.direction === "IN") return "unreplied";
   return "replied";
 }
-type Account = { id: string; label: string; sub: string | null; type: "WA_CLOUD" | "WA_QR" | "INSTAGRAM" | "MESSENGER" };
+type Account = { id: string; label: string; sub: string | null; type: "WA_CLOUD" | "WA_QR" | "INSTAGRAM" | "MESSENGER" | "WEBCHAT" };
 type FilterOptions = {
   tags: string[];
   pipelines: { id: string; name: string; stages: { id: string; name: string }[] }[];
@@ -130,6 +157,7 @@ function renderTextWithLinks(text: string): React.ReactNode {
 }
 type Active = {
   id: string;
+  channel: keyof typeof CHANNEL_META;
   channelAccountId: string | null;
   aiPaused: boolean;
   aiTyping: boolean;
@@ -185,6 +213,11 @@ export function InboxClient({ isGuest = false, userName = "" }: { isGuest?: bool
     try { return localStorage.getItem("inbox_sound") !== "false"; } catch { return true; }
   });
   const soundEnabledRef = useRef(soundEnabled);
+  // Track pesan yang sudah pernah dirender — hanya pesan baru yang dapat animasi
+  const seenMsgIds = useRef<Set<string>>(new Set());
+  const [newMsgIds, setNewMsgIds] = useState<Set<string>>(new Set());
+  // Setelah optimistic send, skip animasi pada loadActive berikutnya (sudah animasi via optimistic)
+  const skipNextAnimRef = useRef(false);
 
   const threadRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -355,22 +388,30 @@ export function InboxClient({ isGuest = false, userName = "" }: { isGuest?: bool
   }
 
   function pickFromLibrary(item: { url: string; name: string; type: string }) {
-    const mediaType = item.type.startsWith("image/") ? "image"
-      : item.type.startsWith("video/") ? "video"
-      : item.type.startsWith("audio/") ? "audio"
+    const mediaType = (item.type === "image" || item.type.startsWith("image/")) ? "image"
+      : (item.type === "video" || item.type.startsWith("video/")) ? "video"
+      : (item.type === "audio" || item.type.startsWith("audio/")) ? "audio"
       : "document";
     setPending((p) => [...p, { url: item.url, type: mediaType, name: item.name }]);
     setShowLibraryPicker(false);
   }
 
+  const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   function onText(v: string) {
     setText(v);
     setShowQR(v.startsWith("/"));
     requestAnimationFrame(autoGrow);
+    // kirim typing indicator ke widget jika conversation WEBCHAT
+    if (active?.channel === "WEBCHAT" && activeId && v.trim()) {
+      if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
+      typingTimerRef.current = setTimeout(() => {
+        fetch(`/api/inbox/conversations/${activeId}/typing`, { method: "POST" });
+      }, 400);
+    }
   }
 
   function resolveVars(tpl: string): string {
-    const customerName = active?.customer?.name ?? active?.customer?.externalId ?? "";
+    const customerName = active?.customer ? displayName(active.customer) : "";
     const today = new Date().toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" });
     const fuFormatted = nextFuDate
       ? new Date(nextFuDate).toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" })
@@ -481,11 +522,36 @@ export function InboxClient({ isGuest = false, userName = "" }: { isGuest?: bool
   const accountLabel = (id: string | null) =>
     id ? accounts.find((a) => a.id === id)?.label ?? null : null;
 
+  // Warna badge berbeda per akun, supaya mudah dibedakan di inbox
+  const WABA_BADGE_COLORS = [
+    "bg-emerald-100 text-emerald-700",
+    "bg-violet-100 text-violet-700",
+    "bg-blue-100 text-blue-700",
+    "bg-amber-100 text-amber-700",
+  ];
+  const QR_BADGE_COLORS = [
+    "bg-sky-100 text-sky-700",
+    "bg-teal-100 text-teal-700",
+    "bg-indigo-100 text-indigo-700",
+    "bg-rose-100 text-rose-700",
+  ];
+  const wabaBadgeColor = (channelAccountId: string | null) => {
+    const wabaAccounts = accounts.filter((a) => a.type === "WA_CLOUD");
+    const idx = wabaAccounts.findIndex((a) => a.id === channelAccountId);
+    return WABA_BADGE_COLORS[Math.max(0, idx) % WABA_BADGE_COLORS.length];
+  };
+  const qrBadgeColor = (channelAccountId: string | null) => {
+    const qrAccounts = accounts.filter((a) => a.type === "WA_QR");
+    const idx = qrAccounts.findIndex((a) => a.id === channelAccountId);
+    return QR_BADGE_COLORS[Math.max(0, idx) % QR_BADGE_COLORS.length];
+  };
+
   const CHANNEL_ICON: Record<Account["type"], string> = {
     WA_CLOUD: "WA",
     WA_QR: "WA",
     INSTAGRAM: "IG",
     MESSENGER: "MSG",
+    WEBCHAT: "Web Chat",
   };
 
   async function reassignConv(convId: string, assignedToId: string | null) {
@@ -538,6 +604,21 @@ export function InboxClient({ isGuest = false, userName = "" }: { isGuest?: bool
       // API mengembalikan desc (terbaru duluan) agar 200 pesan terbaru yang diambil
       if (conv?.messages) conv.messages = [...conv.messages].reverse();
       setActive(conv);
+
+      // Deteksi pesan yang belum pernah dirender → beri animasi
+      // (skip jika dipanggil tepat setelah optimistic send — sudah animasi via optimistic)
+      if (conv?.messages) {
+        const skip = skipNextAnimRef.current;
+        skipNextAnimRef.current = false;
+        const fresh = new Set<string>();
+        for (const m of conv.messages as { id: string }[]) {
+          if (!seenMsgIds.current.has(m.id)) {
+            if (!skip) fresh.add(m.id);
+            seenMsgIds.current.add(m.id);
+          }
+        }
+        if (fresh.size > 0) setNewMsgIds(fresh);
+      }
     }
   }, []);
 
@@ -557,9 +638,11 @@ export function InboxClient({ isGuest = false, userName = "" }: { isGuest?: bool
     return () => { es.close(); clearInterval(fallback); };
   }, [loadConvs]);
 
-  // Load pesan saat pindah percakapan
+  // Load pesan saat pindah percakapan — reset seen IDs agar initial load tidak animasi
   useEffect(() => {
     if (!activeId) return;
+    seenMsgIds.current = new Set();
+    setNewMsgIds(new Set());
     loadActive(activeId);
   }, [activeId, loadActive]);
 
@@ -588,18 +671,20 @@ export function InboxClient({ isGuest = false, userName = "" }: { isGuest?: bool
       .catch(() => {});
   }, [active?.customer?.id]);
 
-  const scrollToBottom = useCallback(() => {
+  const scrollToBottom = useCallback((smooth = false) => {
     requestAnimationFrame(() => {
-      bottomRef.current?.scrollIntoView({ block: "end" });
+      bottomRef.current?.scrollIntoView({ behavior: smooth ? "smooth" : "instant", block: "end" });
     });
   }, []);
 
+  // Saat pindah percakapan → scroll instant (loncat langsung ke bawah)
   useEffect(() => {
-    scrollToBottom();
+    scrollToBottom(false);
   }, [activeId, scrollToBottom]);
 
+  // Saat ada pesan baru → scroll smooth
   useEffect(() => {
-    scrollToBottom();
+    scrollToBottom(true);
   }, [active?.messages.length, scrollToBottom]);
 
   async function send() {
@@ -608,12 +693,34 @@ export function InboxClient({ isGuest = false, userName = "" }: { isGuest?: bool
     setSending(true);
     setSendErr(null);
     const savedPending = [...pending];
-    const body = { text, attachments: pending, replyToId: replyingTo?.id ?? null };
+    const savedReplyingTo = replyingTo;
+    const textToSend = text;
+    const body = { text: textToSend, attachments: pending, replyToId: replyingTo?.id ?? null };
     setText("");
     setPending([]);
     setReplyingTo(null);
     setShowQR(false);
     if (composerRef.current) composerRef.current.style.height = "auto";
+
+    // Optimistic UI — tampilkan pesan seketika sebelum server konfirmasi
+    const tempId = `temp-${Date.now()}`;
+    const optimisticMsg: Msg = {
+      id: tempId,
+      direction: "OUT",
+      text: textToSend || null,
+      mediaUrl: savedPending[0]?.url ?? null,
+      mediaType: savedPending[0]?.type ?? null,
+      status: "SENT",
+      createdAt: new Date().toISOString(),
+      replyTo: savedReplyingTo
+        ? { id: savedReplyingTo.id, text: savedReplyingTo.text, mediaType: savedReplyingTo.mediaType, direction: savedReplyingTo.direction }
+        : null,
+    };
+    seenMsgIds.current.add(tempId);
+    setNewMsgIds(new Set([tempId]));
+    setActive((prev) => prev ? { ...prev, messages: [...prev.messages, optimisticMsg] } : prev);
+    scrollToBottom(true);
+
     try {
       const r = await fetch(`/api/inbox/conversations/${activeId}/reply`, {
         method: "POST",
@@ -624,16 +731,21 @@ export function InboxClient({ isGuest = false, userName = "" }: { isGuest?: bool
         const d = await r.json().catch(() => ({}));
         setSendErr((d as { error?: string }).error || `Gagal kirim (${r.status})`);
         setPending(savedPending);
+        // Hapus optimistic message jika gagal
+        setActive((prev) => prev ? { ...prev, messages: prev.messages.filter((m) => m.id !== tempId) } : prev);
       }
     } catch {
       setSendErr("Gagal kirim, cek koneksi internet");
       setPending(savedPending);
+      setActive((prev) => prev ? { ...prev, messages: prev.messages.filter((m) => m.id !== tempId) } : prev);
     }
+    // Skip animasi pada loadActive berikutnya — pesan sudah animasi via optimistic
+    skipNextAnimRef.current = true;
     await Promise.all([loadActive(activeId), loadConvs()]);
     setSending(false);
     // Cek jurnal hari ini setelah reply pertama
     const cid = active?.customer.id;
-    const cname = active?.customer.name ?? active?.customer.externalId ?? "";
+    const cname = active?.customer ? displayName(active.customer) : "";
     if (cid) {
       const alerted = sessionStorage.getItem(`j-alerted-${cid}`);
       if (!alerted) {
@@ -691,7 +803,10 @@ export function InboxClient({ isGuest = false, userName = "" }: { isGuest?: bool
     ? qrList.filter((q) => q.shortcut.startsWith(text.toLowerCase()))
     : [];
 
-  const win = active ? windowState(active.customer.windowExpiresAt) : null;
+  // Window 24 jam hanya berlaku untuk WA Cloud API — WA QR tidak punya batasan ini
+  const win = (active && active.channel === "WA_CLOUD")
+    ? windowState(active.customer.windowExpiresAt)
+    : null;
 
   return (
     <div className="flex h-full">
@@ -794,6 +909,7 @@ export function InboxClient({ isGuest = false, userName = "" }: { isGuest?: bool
                         WA_QR: "bg-green-100 text-green-700",
                         INSTAGRAM: "bg-pink-100 text-pink-700",
                         MESSENGER: "bg-blue-100 text-blue-700",
+                        WEBCHAT: "bg-purple-100 text-purple-700",
                       };
                       return (
                         <button
@@ -1111,7 +1227,7 @@ export function InboxClient({ isGuest = false, userName = "" }: { isGuest?: bool
             </div>
           )}
           {convs.map((c) => {
-            const ch = CHANNEL_META[c.customer.channel];
+            const ch = CHANNEL_META[c.channel] ?? CHANNEL_META[c.customer.channel];
             const activeItem = c.id === activeId;
             const status = replyStatus(c);
             const leftBorder =
@@ -1142,7 +1258,7 @@ export function InboxClient({ isGuest = false, userName = "" }: { isGuest?: bool
                     "flex h-10 w-10 items-center justify-center rounded-full bg-muted text-sm font-semibold",
                     avatarRing,
                   )}>
-                    {(c.customer.name ?? c.customer.externalId).charAt(0).toUpperCase()}
+                    {displayName(c.customer).charAt(0).toUpperCase()}
                   </div>
                   <span
                     className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-white"
@@ -1157,7 +1273,7 @@ export function InboxClient({ isGuest = false, userName = "" }: { isGuest?: bool
                         "truncate text-sm",
                         status === "unread" ? "font-bold" : "font-medium",
                       )}>
-                        {c.customer.name ?? c.customer.externalId}
+                        {displayName(c.customer)}
                       </span>
                       {(c.customer.channel === "INSTAGRAM" || c.customer.channel === "MESSENGER") && (
                         <span className={cn(
@@ -1235,13 +1351,25 @@ export function InboxClient({ isGuest = false, userName = "" }: { isGuest?: bool
                       )}
                     </div>
                   </div>
-                  {accounts.length > 1 && accountLabel(c.channelAccountId) && (
+                  {(c.channel === "WA_CLOUD" || c.channel === "WA_QR") ? (
+                    <div className="mt-1">
+                      <span className={cn(
+                        "rounded px-1.5 py-0.5 text-[10px] font-medium",
+                        c.channel === "WA_CLOUD"
+                          ? wabaBadgeColor(c.channelAccountId)
+                          : qrBadgeColor(c.channelAccountId),
+                      )}>
+                        {c.channel === "WA_CLOUD" ? "Cloud API" : "WA Biasa"}
+                        {accountLabel(c.channelAccountId) ? ` · ${accountLabel(c.channelAccountId)}` : ""}
+                      </span>
+                    </div>
+                  ) : (accounts.length > 1 && accountLabel(c.channelAccountId)) ? (
                     <div className="mt-1">
                       <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
                         {accountLabel(c.channelAccountId)}
                       </span>
                     </div>
-                  )}
+                  ) : null}
                   {search && c.messages[0]?.text &&
                     c.messages[0].text.toLowerCase().includes(search.toLowerCase()) &&
                     !(c.customer.name ?? "").toLowerCase().includes(search.toLowerCase()) &&
@@ -1304,12 +1432,17 @@ export function InboxClient({ isGuest = false, userName = "" }: { isGuest?: bool
                 </button>
                 <div className="min-w-0">
                   <div className="truncate font-semibold">
-                    {active.customer.name ?? active.customer.externalId}
+                    {displayName(active.customer)}
                   </div>
                   <div className="truncate text-xs text-muted-foreground">
                     {active.customer.externalId}
+                    {active.channel === "WA_CLOUD"
+                      ? " · Cloud API"
+                      : active.channel === "WA_QR"
+                        ? " · WA Biasa"
+                        : ""}
                     {accountLabel(active.channelAccountId)
-                      ? ` · via ${accountLabel(active.channelAccountId)}`
+                      ? ` · ${accountLabel(active.channelAccountId)}`
                       : ""}
                   </div>
                 </div>
@@ -1406,6 +1539,10 @@ export function InboxClient({ isGuest = false, userName = "" }: { isGuest?: bool
                 const showDateSep =
                   idx === 0 ||
                   !isSameDay(m.createdAt, active.messages[idx - 1].createdAt);
+                const isNew = newMsgIds.has(m.id);
+                const animClass = isNew
+                  ? m.direction === "OUT" ? "msg-new-out" : "msg-new-in"
+                  : "";
                 return (
                   <Fragment key={m.id}>
                     {showDateSep && (
@@ -1421,7 +1558,7 @@ export function InboxClient({ isGuest = false, userName = "" }: { isGuest?: bool
                       let d: { sourceUrl?: string; headline?: string; body?: string; imageUrl?: string; adId?: string } = {};
                       try { d = JSON.parse(m.text ?? "{}"); } catch {}
                       return (
-                        <div className="flex justify-center my-1">
+                        <div className={cn("flex justify-center my-1", animClass)}>
                           <div className="w-full max-w-[75%] overflow-hidden rounded-xl border border-blue-200 bg-blue-50 text-sm shadow-sm md:max-w-[60%]">
                             {d.imageUrl && (
                               // eslint-disable-next-line @next/next/no-img-element
@@ -1447,6 +1584,7 @@ export function InboxClient({ isGuest = false, userName = "" }: { isGuest?: bool
                       className={cn(
                         "group flex items-center gap-1.5",
                         m.direction === "OUT" ? "justify-end" : "justify-start",
+                        animClass,
                       )}
                     >
                       {m.direction === "OUT" && (

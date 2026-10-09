@@ -25,6 +25,7 @@ enum Channel {
   WA_CLOUD
   INSTAGRAM
   MESSENGER
+  WEBCHAT
 }
 
 enum ConvStatus {
@@ -131,6 +132,7 @@ model Customer {
   capiEvents       CapiEvent[]
   leadTagItems     LeadTagItem[]
   audienceProfiles AudienceProfile[]
+  webChatSessions  WebChatSession[]
 
   @@unique([channel, externalId])
   @@index([lastContactAt])
@@ -195,6 +197,7 @@ model Conversation {
   aiTyping        Boolean    @default(false) // true = AI sedang generate balasan
   aiTypingAt      DateTime?  // kapan AI mulai typing (untuk timeout 30 detik di client)
   channelAccountId String? // WA_CLOUD: phone_number_id nomor kita yang dipakai
+  waQrJid         String? // WA_QR via WAHA: JID asli pengirim (bisa @s.whatsapp.net atau @lid)
   lastMessageAt   DateTime?
   lastMessageText String?
   assignedToId    String?
@@ -369,6 +372,11 @@ model AutoReply {
   keywords    String[]         @default([])
   replyText   String?
   attachments Json?
+  buttons     Json?            // [{type:"quick_reply"|"url", label:string, value:string}]
+  channels    String[]         @default([]) // kosong = semua channel; isi = filter channel tertentu
+  aiRephrase  Boolean          @default(false) // true = parafrase via AI sebelum kirim
+  delayMin    Int              @default(0)     // detik, jeda minimum sebelum kirim
+  delayMax    Int              @default(0)     // detik, jeda maksimum (random antara min-max)
   active      Boolean          @default(true)
   order       Int              @default(0)
   createdAt   DateTime         @default(now())
@@ -467,14 +475,15 @@ model WabaChannel {
 }
 
 model WaQrChannel {
-  id        String   @id @default(cuid())
-  label     String
-  port      Int      @unique
-  authDir   String   @unique
-  pm2Name   String   @unique
-  phone     String?
-  active    Boolean  @default(true)
-  createdAt DateTime @default(now())
+  id            String         @id @default(cuid())
+  label         String
+  port          Int            @unique
+  authDir       String         @unique
+  pm2Name       String         @unique
+  phone         String?
+  active        Boolean        @default(true)
+  createdAt     DateTime       @default(now())
+  trackingLinks TrackingLink[]
 
   @@map("wa_qr_channels")
 }
@@ -521,6 +530,7 @@ model BroadcastRecipient {
   to         String
   status     String       @default("pending") // pending | sent | failed
   error      String?
+  wamid      String?
 
   @@index([jobId])
   @@map("broadcast_recipients")
@@ -650,6 +660,8 @@ model TrackingLink {
   codePosition     String         @default("after") // "before" | "after"
   channelId        String?
   channel          WabaChannel?   @relation(fields: [channelId], references: [id], onDelete: SetNull)
+  waQrChannelId    String?
+  waQrChannel      WaQrChannel?   @relation(fields: [waQrChannelId], references: [id], onDelete: SetNull)
   isActive         Boolean        @default(true)
   pageViewEvent    String?        // CAPI event saat LP dibuka
   clickEvent       String?        // CAPI event saat link diklik
@@ -662,7 +674,7 @@ model TrackingLink {
 
 model TrackingDomain {
   id        String   @id @default(cuid())
-  domain    String   @unique // e.g. https://chat.odac-corp.com
+  domain    String   @unique // contoh: https://chat.klinikaqma.com
   label     String?
   createdAt DateTime @default(now())
 
@@ -869,4 +881,20 @@ model PushSubscription {
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("push_subscriptions")
+}
+
+model WebChatSession {
+  id             String    @id @default(cuid())
+  token          String    @unique @default(cuid())
+  visitorName    String?
+  visitorPhone   String?
+  customerId     String?
+  customer       Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  conversationId String?   @unique
+  identified     Boolean   @default(false)
+  lastActiveAt   DateTime  @default(now())
+  createdAt      DateTime  @default(now())
+
+  @@index([token])
+  @@map("web_chat_sessions")
 }

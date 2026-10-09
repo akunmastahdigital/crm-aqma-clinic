@@ -22,8 +22,10 @@ export async function GET(
 
   const link = await prisma.trackingLink.findUnique({
     where: { slug, isActive: true },
-    include: { channel: { select: { displayPhone: true, phoneNumberId: true } } },
-    // clickEvent & pageViewEvent included via prisma auto-select
+    include: {
+      channel: { select: { displayPhone: true, phoneNumberId: true } },
+      waQrChannel: { select: { phone: true } },
+    },
   });
 
   if (!link) return new NextResponse("Not found", { status: 404 });
@@ -99,7 +101,7 @@ export async function GET(
       ? `[${code}] ${link.greetingTemplate}`
       : `${link.greetingTemplate} [${code}]`;
 
-  const waNum = (link.channel?.displayPhone ?? link.channel?.phoneNumberId ?? "")
+  const waNum = (link.channel?.displayPhone ?? link.channel?.phoneNumberId ?? link.waQrChannel?.phone ?? "")
     .replace(/\D/g, "");
   const waUrl = `https://wa.me/${waNum}?text=${encodeURIComponent(greeting)}`;
 

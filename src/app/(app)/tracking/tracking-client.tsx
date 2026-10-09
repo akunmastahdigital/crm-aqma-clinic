@@ -86,7 +86,7 @@ export function TrackingClient() {
   useEffect(() => {
     loadLinks();
     fetch("/api/tracking/events").then(r => r.json()).then(d => setCapiEvents(d.events ?? []));
-    fetch("/api/inbox/accounts").then(r => r.json()).then(d => setChannels((d.accounts ?? []).filter((a: Channel) => a.type === "WA_CLOUD")));
+    fetch("/api/inbox/accounts").then(r => r.json()).then(d => setChannels((d.accounts ?? []).filter((a: Channel) => a.type === "WA_CLOUD" || a.type === "WA_QR")));
     fetch("/api/tracking/domains").then(r => r.json()).then(d => {
       const list: TrackingDomain[] = d.domains ?? [];
       setDomains(list);
@@ -364,11 +364,20 @@ export function TrackingClient() {
                 <label className="text-xs font-medium">Nomor WA (Channel)</label>
                 <select value={editing.channelId ?? ""} onChange={e => setEditing(p => ({ ...p, channelId: e.target.value }))} className={field}>
                   <option value="">— Pilih channel WA —</option>
-                  {channels.map(ch => (
-                    <option key={ch.id} value={ch.id}>
-                      {ch.label}{ch.sub ? ` (${ch.sub})` : ""}
-                    </option>
-                  ))}
+                  {channels.filter(ch => ch.type === "WA_CLOUD").length > 0 && (
+                    <optgroup label="WA Cloud API">
+                      {channels.filter(ch => ch.type === "WA_CLOUD").map(ch => (
+                        <option key={ch.id} value={ch.id}>{ch.label}{ch.sub ? ` (${ch.sub})` : ""}</option>
+                      ))}
+                    </optgroup>
+                  )}
+                  {channels.filter(ch => ch.type === "WA_QR").length > 0 && (
+                    <optgroup label="WA QR / Biasa">
+                      {channels.filter(ch => ch.type === "WA_QR").map(ch => (
+                        <option key={ch.id} value={ch.id}>{ch.label}{ch.sub ? ` (${ch.sub})` : ""}</option>
+                      ))}
+                    </optgroup>
+                  )}
                 </select>
               </div>
               <div>

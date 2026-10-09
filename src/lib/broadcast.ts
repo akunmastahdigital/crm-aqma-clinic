@@ -1,6 +1,24 @@
 import { prisma } from "@/lib/db";
 import { sendWabaTemplate } from "@/lib/waba";
 
+async function upsertConvForBroadcast(to: string, channelAccountId: string) {
+  const now = new Date();
+  const customer = await prisma.customer.upsert({
+    where: { channel_externalId: { channel: "WA_CLOUD", externalId: to } },
+    update: { lastContactAt: now },
+    create: { channel: "WA_CLOUD", externalId: to, phone: to, lastContactAt: now },
+  });
+  let conv = await prisma.conversation.findFirst({
+    where: { customerId: customer.id, status: { not: "CLOSED" }, channelAccountId },
+    orderBy: { lastMessageAt: "desc" },
+  });
+  if (!conv)
+    conv = await prisma.conversation.create({
+      data: { customerId: customer.id, channel: "WA_CLOUD", channelAccountId, status: "OPEN" },
+    });
+  return conv;
+}
+
 const DELAY_MS = 1500; // jeda antar kirim biar nomor aman
 
 export async function createBroadcast(input: {
@@ -55,16 +73,30 @@ async function processBroadcast(jobId: string) {
   let failed = 0;
   for (const r of recipients) {
     try {
-      await sendWabaTemplate(
+      const tplData = await sendWabaTemplate(
         channel.phoneNumberId,
         r.to,
         job.templateName,
         job.templateLang,
         channel.accessToken,
       );
+      const wamid: string | null = (tplData as { messages?: Array<{ id?: string }> })?.messages?.[0]?.id ?? null;
+      // Simpan pesan BC ke conversation lead agar tampil di inbox + bisa track status
+      try {
+        const conv = await upsertConvForBroadcast(r.to, channel.phoneNumberId);
+        const label = `[BC] ${job.templateName}`;
+        const now = new Date();
+        await prisma.message.create({
+          data: { conversationId: conv.id, direction: "OUT", text: label, status: "SENT", externalId: wamid },
+        });
+        await prisma.conversation.update({
+          where: { id: conv.id },
+          data: { lastMessageAt: now, lastMessageText: label },
+        });
+      } catch {}
       await prisma.broadcastRecipient.update({
         where: { id: r.id },
-        data: { status: "sent" },
+        data: { status: "sent", wamid },
       });
       sent++;
     } catch (e) {

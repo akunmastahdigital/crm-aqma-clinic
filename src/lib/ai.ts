@@ -47,6 +47,13 @@ async function callLLM(
   return (data.choices?.[0]?.message?.content ?? "").trim();
 }
 
+export async function callAiRaw(
+  settings: Awaited<ReturnType<typeof getAiSettings>>,
+  messages: ChatMsg[],
+): Promise<string> {
+  return callLLM(settings, messages);
+}
+
 export async function buildSystemPrompt(
   settings: Awaited<ReturnType<typeof getAiSettings>>,
 ) {

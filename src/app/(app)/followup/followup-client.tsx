@@ -12,9 +12,21 @@ type FollowUp = {
   scheduledAt: string;
   note: string | null;
   conversationId: string | null;
-  customer: { name: string | null; externalId: string };
+  customer: { name: string | null; externalId: string; tags: string[] };
   assignedTo: { name: string } | null;
 };
+
+const TAG_COLORS: Record<string, string> = {
+  "Deal":           "#16a34a",
+  "Reservasi":      "#16a34a",
+  "Potensi":        "#0ea5e9",
+  "Respon Panjang": "#0ea5e9",
+  "Drop":           "#f59e0b",
+  "Respon Pendek":  "#f59e0b",
+  "Gagal Closing":  "#dc2626",
+  "Greeting text":  "#8b5cf6",
+};
+function tagColor(tag: string) { return TAG_COLORS[tag] ?? "#6b7280"; }
 
 export function FollowupClient() {
   const [items, setItems] = useState<FollowUp[]>([]);
@@ -194,8 +206,19 @@ function Section({
               {(f.customer.name ?? f.customer.externalId).charAt(0).toUpperCase()}
             </div>
             <div className="min-w-0 flex-1">
-              <div className="font-medium">
-                {f.customer.name ?? f.customer.externalId}
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="font-medium">
+                  {f.customer.name ?? f.customer.externalId}
+                </span>
+                {f.customer.tags.map((tag) => (
+                  <span
+                    key={tag}
+                    className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold text-white"
+                    style={{ backgroundColor: tagColor(tag) }}
+                  >
+                    {tag}
+                  </span>
+                ))}
               </div>
               {f.note && (
                 <div className="truncate text-sm text-muted-foreground">{f.note}</div>

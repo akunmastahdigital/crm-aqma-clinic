@@ -4,6 +4,7 @@ import type { Prisma } from "@prisma/client";
 import { runAutomations } from "@/lib/automation";
 import { maybeAutoAiReply, getAiSettings } from "@/lib/ai";
 import { broadcastInbox } from "@/lib/sse-hub";
+import { broadcastWebChat } from "@/lib/webchat-sse-hub";
 import { sendPushToAll } from "@/lib/push";
 import { deliverOutbound } from "@/lib/delivery";
 import { isOutsideHours, matchesEscalation } from "@/lib/chatrules";
@@ -63,11 +64,12 @@ export async function apiSendTemplate(
   language: string,
 ) {
   const channel = await resolveChannel(channelAccountId);
-  await sendWabaTemplate(channel.phoneNumberId, to, template, language, channel.accessToken);
+  const tplData = await sendWabaTemplate(channel.phoneNumberId, to, template, language, channel.accessToken);
+  const wamid: string | null = (tplData as { messages?: Array<{ id?: string }> })?.messages?.[0]?.id ?? null;
   const conv = await upsertConv(to, channel.phoneNumberId);
   const label = `[Template] ${template}`;
   await prisma.message.create({
-    data: { conversationId: conv.id, direction: "OUT", text: label, status: "SENT" },
+    data: { conversationId: conv.id, direction: "OUT", text: label, status: "SENT", externalId: wamid },
   });
   await prisma.conversation.update({
     where: { id: conv.id },
@@ -78,14 +80,14 @@ export async function apiSendTemplate(
 
 // kirim 1 pesan sistem (OUT) + teruskan ke channel asli
 async function systemReply(convId: string, text: string) {
-  await prisma.message.create({
+  const msg = await prisma.message.create({
     data: { conversationId: convId, direction: "OUT", text, status: "SENT" },
   });
   await prisma.conversation.update({
     where: { id: convId },
     data: { lastMessageAt: new Date(), lastMessageText: text },
   });
-  await deliverOutbound(convId, { text });
+  await deliverOutbound(convId, { text, messageIds: [msg.id] });
 }
 
 // Hitung & simpan First Response Time saat agent pertama kali manual reply
@@ -186,9 +188,21 @@ export async function listConversations(
   if (filter.assign === "mine") and.push({ assignedToId: session.uid });
   if (filter.assign === "unassigned") and.push({ assignedToId: null });
   if (filter.accounts && filter.accounts.length > 0) {
-    and.push({ channelAccountId: { in: filter.accounts } });
+    const wcIncluded = filter.accounts.includes("WEBCHAT");
+    const realAccounts = filter.accounts.filter((a) => a !== "WEBCHAT");
+    if (wcIncluded && realAccounts.length > 0) {
+      and.push({ OR: [{ channelAccountId: { in: realAccounts } }, { channel: "WEBCHAT" }] });
+    } else if (wcIncluded) {
+      and.push({ channel: "WEBCHAT" });
+    } else {
+      and.push({ channelAccountId: { in: realAccounts } });
+    }
   } else if (filter.account) {
-    and.push({ channelAccountId: filter.account });
+    if (filter.account === "WEBCHAT") {
+      and.push({ channel: "WEBCHAT" });
+    } else {
+      and.push({ channelAccountId: filter.account });
+    }
   }
   if (filter.q && filter.q.trim()) {
     const q = filter.q.trim();
@@ -294,6 +308,10 @@ export async function getConversation(id: string, session: SessionUser) {
   });
   if (conv && conv.unread > 0) {
     await prisma.conversation.update({ where: { id }, data: { unread: 0 } });
+    // Untuk WEBCHAT: beritahu widget bahwa semua pesan visitor sudah dibaca agent
+    if (conv.channel === "WEBCHAT") {
+      broadcastWebChat(id, { type: "read" });
+    }
   }
   return conv;
 }
@@ -361,16 +379,26 @@ export async function sendReply(
   const preview =
     text.trim() ||
     (attachments.length ? `[${attachments[0].type}] ${attachments[0].name ?? ""}` : "");
+  // Auto-assign ke agent yang pertama balas (jika belum ada yang di-assign)
+  const isRealUser = !!authorId;
+  const shouldAutoAssign = isRealUser && conv.assignedToId === null;
+
   await prisma.conversation.update({
     where: { id: convId },
     data: {
       lastMessageAt: new Date(),
       lastMessageText: preview,
-      ...(conv.assignedToId === null && session.role === "AGENT"
-        ? { assignedToId: session.uid }
-        : {}),
+      ...(shouldAutoAssign ? { assignedToId: session.uid } : {}),
     },
   });
+
+  // Sync auto-assign ke customer juga (agar "Ditugaskan ke" di panel ikut terisi)
+  if (shouldAutoAssign) {
+    const cust = await prisma.customer.findUnique({ where: { id: conv.customerId }, select: { assignedToId: true } });
+    if (cust && cust.assignedToId === null) {
+      await prisma.customer.update({ where: { id: conv.customerId }, data: { assignedToId: session.uid } });
+    }
+  }
   // kirim ke channel asli (WA_CLOUD/WA_QR); SIMULATOR = no-op
   await deliverOutbound(convId, {
     text,
@@ -405,7 +433,7 @@ export async function sendReply(
 
 // Inti pemrosesan pesan masuk — dipakai simulator & channel asli (WA_CLOUD, dll).
 export async function ingestIncoming(input: {
-  channel: "SIMULATOR" | "WA_CLOUD" | "WA_QR" | "INSTAGRAM" | "MESSENGER";
+  channel: "SIMULATOR" | "WA_CLOUD" | "WA_QR" | "INSTAGRAM" | "MESSENGER" | "WEBCHAT";
   channelAccountId?: string | null;
   from: string;
   name?: string;
@@ -428,8 +456,16 @@ export async function ingestIncoming(input: {
           const code = `T-${codeMatch[1].toUpperCase()}`;
           const clickSess = await prisma.clickSession.findUnique({ where: { code } }).catch(() => null);
           if (clickSess && !clickSess.customerId) {
-            const cust = await prisma.customer.findUnique({
-              where: { channel_externalId: { channel: input.channel, externalId: input.from } },
+            const cust = await prisma.customer.findFirst({
+              where: {
+                // channel_externalId hanya valid di findUnique. Di findFirst
+                // kondisinya harus ditulis eksplisit, kalau tidak Prisma melempar
+                // error yang ditelan .catch() dan atribusi diam-diam tidak jalan.
+                OR: [
+                  { AND: [{ channel: input.channel }, { externalId: input.from }] },
+                  { phone: input.from },
+                ],
+              },
               select: { id: true },
             }).catch(() => null);
             if (cust) {
@@ -464,23 +500,34 @@ export async function ingestIncoming(input: {
   const now = new Date();
   const windowExpiresAt = new Date(now.getTime() + WINDOW_MS);
 
-  const existing = await prisma.customer.findUnique({
-    where: { channel_externalId: { channel: input.channel, externalId: input.from } },
-  });
-  const isFirstMessage = !existing;
+  // WA channels: cari customer by nomor HP dulu — satu lead yang chat ke WA Cloud
+  // dan WA QR sekaligus akan pakai Customer yang sama (label, pipeline, jurnal ikut sync)
+  const isWaChannel = input.channel === "WA_CLOUD" || input.channel === "WA_QR";
+  const existingByPhone = isWaChannel
+    ? await prisma.customer.findFirst({ where: { phone: input.from }, select: { id: true } })
+    : null;
+  const existingDirect = !existingByPhone
+    ? await prisma.customer.findUnique({ where: { channel_externalId: { channel: input.channel, externalId: input.from } }, select: { id: true } })
+    : null;
+  const isFirstMessage = !existingByPhone && !existingDirect;
 
-  const customer = await prisma.customer.upsert({
-    where: { channel_externalId: { channel: input.channel, externalId: input.from } },
-    update: { lastContactAt: now, windowExpiresAt, ...(input.name ? { name: input.name } : {}) },
-    create: {
-      channel: input.channel,
-      externalId: input.from,
-      name: input.name ?? null,
-      phone: input.from,
-      lastContactAt: now,
-      windowExpiresAt,
-    },
-  });
+  const customer = existingByPhone
+    ? await prisma.customer.update({
+        where: { id: existingByPhone.id },
+        data: { lastContactAt: now, windowExpiresAt, ...(input.name ? { name: input.name } : {}) },
+      })
+    : await prisma.customer.upsert({
+        where: { channel_externalId: { channel: input.channel, externalId: input.from } },
+        update: { lastContactAt: now, windowExpiresAt, ...(input.name ? { name: input.name } : {}) },
+        create: {
+          channel: input.channel,
+          externalId: input.from,
+          name: input.name ?? null,
+          phone: input.from,
+          lastContactAt: now,
+          windowExpiresAt,
+        },
+      });
 
   // Percakapan dipisah PER NOMOR BISNIS (channelAccountId). Pelanggan yang sama
   // chat ke nomor Depok vs Pondok Kelapa = dua percakapan terpisah, tidak nyampur.
@@ -678,6 +725,7 @@ export async function ingestIncoming(input: {
     conversationId: conv.id,
     text: input.text,
     isFirstMessage,
+    channel: input.channel,
   });
 
   // perilaku chatbot: eskalasi -> jam kerja -> AI

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Check, Smartphone, QrCode, Camera, MessageSquare, ExternalLink, RefreshCw, Plus, Trash2, X, Eye, EyeOff, ChevronDown, ChevronUp, Copy, CheckCheck } from "lucide-react";
+import { Check, Smartphone, QrCode, Camera, MessageSquare, ExternalLink, RefreshCw, Plus, Trash2, X, Eye, EyeOff, ChevronDown, ChevronUp, Copy, CheckCheck, Globe } from "lucide-react";
 import { PageHeader } from "@/components/page-header";
 
 type WabaChannel = { id: string; label: string; wabaId: string; phoneNumberId: string; displayPhone: string | null; active: boolean };
@@ -754,7 +754,73 @@ export function ChannelsClient() {
           )}
         </div>
 
+        {/* Web Chat Widget */}
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <h2 className="text-base font-semibold">Web Chat Widget</h2>
+          </div>
+          <WebChatSection />
+        </div>
+
       </div>
     </>
+  );
+}
+
+function WebChatScriptCopy({ script }: { script: string }) {
+  const [copied, setCopied] = useState(false);
+  async function copy() {
+    await navigator.clipboard.writeText(script).catch(() => {});
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }
+  return (
+    <div className="relative">
+      <pre className="overflow-x-auto rounded-lg bg-gray-900 p-4 text-xs text-green-400 leading-relaxed whitespace-pre-wrap break-all">
+        {script}
+      </pre>
+      <button
+        onClick={copy}
+        className="absolute right-3 top-3 flex items-center gap-1.5 rounded-md bg-white/10 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-white/20 transition-colors"
+      >
+        {copied ? <><CheckCheck className="h-3.5 w-3.5 text-green-400" /> Tersalin!</> : <><Copy className="h-3.5 w-3.5" /> Salin</>}
+      </button>
+    </div>
+  );
+}
+
+function WebChatSection() {
+  const appUrl = typeof window !== "undefined" ? window.location.origin : "https://crm.klinikaqma.com";
+  const embedScript = `<!-- Aqma Clinic Web Chat Widget -->\n<script src="${appUrl}/widget.js?v=8"></script>`;
+
+  return (
+    <div className="rounded-[var(--radius-lg)] border border-border bg-white p-5 space-y-4">
+      <div className="flex items-start gap-3">
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-purple-100">
+          <Globe className="h-5 w-5 text-purple-600" />
+        </div>
+        <div>
+          <div className="font-medium">Web Chat Widget</div>
+          <div className="text-sm text-muted-foreground">Embed widget chat di landing page kamu. Visitor yang chat akan masuk ke Kotak Masuk CRM secara otomatis.</div>
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <div className="text-sm font-medium">Script Embed</div>
+        <div className="text-xs text-muted-foreground">Tempel kode berikut di bagian bawah tag <code className="rounded bg-muted px-1 py-0.5">&lt;body&gt;</code> di setiap landing page kamu.</div>
+        <WebChatScriptCopy script={embedScript} />
+      </div>
+
+      <div className="rounded-lg border border-blue-100 bg-blue-50 p-3 text-xs text-blue-700 space-y-1">
+        <div className="font-semibold">Cara pakai:</div>
+        <ol className="list-decimal list-inside space-y-0.5">
+          <li>Salin script di atas</li>
+          <li>Tempel sebelum tag <code className="rounded bg-blue-100 px-1">&lt;/body&gt;</code> di HTML landing page</li>
+          <li>Visitor akan melihat tombol chat di pojok kanan bawah</li>
+          <li>Setelah isi nama & nomor WA, percakapan langsung masuk ke Kotak Masuk CRM</li>
+          <li>Filter <strong>Web Chat</strong> di Kotak Masuk untuk melihat percakapan web saja</li>
+        </ol>
+      </div>
+    </div>
   );
 }
