@@ -9,7 +9,8 @@
     "db:push": "prisma db push",
     "db:seed": "node --env-file=.env prisma/seed.mjs",
     "db:seed:demo": "node --env-file=.env prisma/seed-demo.mjs",
-    "lint": "eslint"
+    "lint": "eslint",
+    "build:check": "NEXT_DIST_DIR=.next-check next build"
   },
   "dependencies": {
     "@hapi/boom": "^10.0.1",

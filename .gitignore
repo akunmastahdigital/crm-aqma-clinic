@@ -54,3 +54,6 @@ next-env.d.ts
 
 # Log deploy, lokal saja
 /logs
+
+# Build verifikasi, bukan build yang dilayani
+/.next-check
