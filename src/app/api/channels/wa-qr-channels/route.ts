@@ -10,6 +10,7 @@ export const dynamic = "force-dynamic";
 const APP_PORT = process.env.PORT || "3050";
 const WAHA_URL = process.env.WAHA_URL || "http://127.0.0.1:3055";
 const WAHA_API_KEY = process.env.WAHA_API_KEY || "";
+const WEBHOOK_SECRET = process.env.WAHA_WEBHOOK_SECRET || "";
 const APP_URL = process.env.APP_URL || `http://127.0.0.1:${APP_PORT}`;
 // Webhook harus bisa dicapai dari dalam container — pakai host.docker.internal
 const WEBHOOK_HOST = APP_URL.includes("127.0.0.1") || APP_URL.includes("localhost")
@@ -71,7 +72,13 @@ export async function POST(req: Request) {
         config: {
           webhooks: [{
             url: `${WEBHOOK_HOST}/api/internal/waha-webhook`,
-            events: ["message"],
+            // message.ack dibutuhkan supaya status ceklis WhatsApp ikut terupdate
+            events: ["message", "message.ack"],
+            // Rahasia dikirim sebagai header. Endpoint webhook memeriksanya,
+            // karena endpoint itu publik (dipanggil WAHA, bukan browser).
+            ...(WEBHOOK_SECRET
+              ? { customHeaders: [{ name: "X-Webhook-Secret", value: WEBHOOK_SECRET }] }
+              : {}),
           }],
         },
       }),

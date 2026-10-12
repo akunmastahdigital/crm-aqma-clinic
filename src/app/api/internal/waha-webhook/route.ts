@@ -9,6 +9,7 @@ export const dynamic = "force-dynamic";
 
 const WAHA_URL = process.env.WAHA_URL || "http://127.0.0.1:3055";
 const WAHA_API_KEY = process.env.WAHA_API_KEY || "";
+const WEBHOOK_SECRET = process.env.WAHA_WEBHOOK_SECRET || "";
 const MEDIA_DIR = process.env.MEDIA_DIR || "/root/work/crm-aqma-clinic/uploads";
 const MEDIA_BASE_URL = process.env.MEDIA_BASE_URL || "/uploads";
 
@@ -54,7 +55,29 @@ async function downloadWahaMedia(url: string, mime: string): Promise<string | nu
 }
 
 // POST /api/internal/waha-webhook — dipanggil WAHA saat ada pesan masuk
+// Endpoint ini publik (tidak lewat cookie sesi) karena dipanggil WAHA, bukan browser.
+// Tanpa verifikasi, siapa pun yang tahu URL-nya bisa menyuntikkan chat pasien palsu
+// ke CRM. Jadi WAHA diminta mengirim header rahasia saat membuat sesi, dan di sini
+// header itu diperiksa.
+function secretOk(req: Request): boolean {
+  if (!WEBHOOK_SECRET) {
+    console.warn(
+      "[waha-webhook] WAHA_WEBHOOK_SECRET belum di-set — endpoint ini terbuka untuk siapa saja. Isi di .env.",
+    );
+    return true; // sengaja tidak memblokir, supaya instalasi lama tidak mendadak mati
+  }
+  const got = req.headers.get("x-webhook-secret") ?? "";
+  if (got.length !== WEBHOOK_SECRET.length) return false;
+  // Perbandingan waktu-tetap, supaya rahasianya tidak bisa ditebak dari lama respons
+  let diff = 0;
+  for (let i = 0; i < got.length; i++) diff |= got.charCodeAt(i) ^ WEBHOOK_SECRET.charCodeAt(i);
+  return diff === 0;
+}
+
 export async function POST(req: Request) {
+  if (!secretOk(req)) {
+    return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  }
   try {
     const body = await req.json().catch(() => ({}));
 

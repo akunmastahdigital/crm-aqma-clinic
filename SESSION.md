@@ -197,6 +197,38 @@ BELUM BISA DIPAKAI:
 PERLU DEPLOY: ada perubahan schema (semua additive, tidak ada kolom dihapus),
 jadi butuh npm run db:push lewat scripts/deploy_aqma.sh — operator yang jalankan.
 
+## 2026-10-12 — Sesi 7: panduan WAHA + tutup lubang webhook
+
+Operator minta panduan pasang WAHA, dengan penekanan agar tidak merusak
+aplikasi/database lain yang hidup di server ini.
+
+TEMUAN KEAMANAN (sebelum menulis panduan):
+/api/internal/waha-webhook sama sekali TIDAK punya verifikasi. Endpoint itu
+publik (tidak lewat cookie sesi) karena dipanggil WAHA. Artinya siapa pun yang
+tahu URL-nya bisa POST dan menyuntikkan percakapan pasien palsu ke CRM.
+Ini bawaan dari upstream Taiba, bukan dari perubahan kita.
+
+DIPERBAIKI:
+- Env baru WAHA_WEBHOOK_SECRET. Webhook memeriksa header X-Webhook-Secret
+  dengan perbandingan waktu-tetap. Kalau secret tidak di-set, request tetap
+  diterima tapi menulis warning — sengaja, supaya instalasi lama tidak mendadak
+  mati tanpa penjelasan.
+- Saat membuat sesi, CRM otomatis mengirim customHeaders berisi secret itu ke
+  WAHA, jadi operator tidak perlu menyetelnya manual di dua tempat.
+- Sekalian: event webhook ditambah "message.ack", sebelumnya hanya "message"
+  sehingga status ceklis WhatsApp tidak akan pernah terupdate.
+
+DITULIS: docs/setup-waha.md — 8 langkah, plus daftar perintah Docker yang
+DILARANG (prune, rm -f tanpa nama, compose down di folder lain), peringatan
+jangan pakai opsi MongoDB WAHA, wajib bind ke 127.0.0.1 (bukan 0.0.0.0),
+pm2 restart per-nama bukan "pm2 restart all", dan nginx -t sebelum reload.
+.env.example ikut diperbarui (WAHA_*, MEDIA_DIR).
+
+Build diverifikasi dengan npm run build:check — folder .next yang dilayani
+pm2 TIDAK tersentuh (timestamp tetap 9 Okt 13:07).
+
+BELUM: container WAHA belum ada. Butuh operator menjalankan Docker.
+
 MASIH PERLU DIKONFIRMASI OPERATOR:
 - Daftar treatment & struktur harga Aqma yang sebenarnya (pemetaan paket sesi
   1x/3x/6x/12x saat ini ASUMSI saya, bukan data asli).
