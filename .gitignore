@@ -57,3 +57,6 @@ next-env.d.ts
 
 # Build verifikasi, bukan build yang dilayani
 /.next-check
+
+# .env.example BOLEH di-commit (template, semua nilai rahasia dikosongkan)
+!.env.example
