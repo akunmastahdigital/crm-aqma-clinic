@@ -48,6 +48,7 @@ export const NAV: NavGroup[] = [
       { label: "AI Chatbot", href: "/ai", icon: "Bot", ability: "manage_ai" },
       { label: "Tim", href: "/team", icon: "UserCog", ability: "view_reports" },
       { label: "Channel", href: "/channels", icon: "Plug", ability: "manage_channels" },
+      { label: "Pengaturan Klinik", href: "/klinik", icon: "Stethoscope", ability: "manage_crm_settings" },
       { label: "Pengaturan CRM", href: "/crm-settings", icon: "SlidersHorizontal", ability: "manage_crm_settings" },
       { label: "Tanda Minat", href: "/settings/minat", icon: "Sparkles", ability: "manage_crm_settings" },
       { label: "Pengaturan", href: "/settings", icon: "Settings" },

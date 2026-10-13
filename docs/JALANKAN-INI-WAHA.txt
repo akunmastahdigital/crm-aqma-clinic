@@ -1,0 +1,78 @@
+LANGKAH YANG HARUS DIJALANKAN OPERATOR — PASANG WAHA UNTUK CRM AQMA
+====================================================================
+
+Semua persiapan sudah selesai. Tinggal 3 perintah.
+
+Rahasia (API key & webhook secret) sudah dibuat dan tersimpan di .env.
+Perintah di bawah membacanya sendiri dari .env, jadi Anda tidak perlu
+menyalin-tempel rahasia apa pun.
+
+CATATAN PENTING SEBELUM MULAI
+-----------------------------
+Di server ini SUDAH ADA container WAHA milik proyek lain:
+    adena-waha  →  127.0.0.1:3042
+JANGAN disentuh. Container kita namanya "waha-aqma" dan pakai port 3055
+(sudah dicek kosong). Semua perintah di bawah menyebut nama container kita
+secara eksplisit, jadi tidak mungkin salah sasaran.
+
+
+PERINTAH 1 — Jalankan container WAHA
+-------------------------------------
+Salin seluruh blok ini apa adanya, lalu Enter:
+
+docker run -d \
+  --name waha-aqma \
+  --restart unless-stopped \
+  -p 127.0.0.1:3055:3000 \
+  -e WHATSAPP_API_KEY="$(grep -E '^WAHA_API_KEY=' /root/work/crm-aqma-clinic/.env | cut -d'"' -f2)" \
+  -e WHATSAPP_DEFAULT_ENGINE=NOWEB \
+  -e WHATSAPP_RESTART_ALL_SESSIONS=True \
+  -v /root/work/crm-aqma-clinic/waha-data:/app/.sessions \
+  --add-host=host.docker.internal:host-gateway \
+  devlikeapro/waha:latest
+
+Yang terjadi: container baru bernama waha-aqma dibuat.
+Tidak menyentuh adena-waha, tidak menyentuh database mana pun.
+
+
+PERINTAH 2 — Cek WAHA sudah hidup
+----------------------------------
+curl -s -o /dev/null -w "WAHA: %{http_code}\n" \
+  -H "X-Api-Key: $(grep -E '^WAHA_API_KEY=' /root/work/crm-aqma-clinic/.env | cut -d'"' -f2)" \
+  http://127.0.0.1:3055/api/sessions
+
+Harus muncul: WAHA: 200
+Kalau 000 atau connection refused, tunggu 10 detik lalu ulangi
+(container butuh waktu start). Kalau masih gagal:
+    docker logs --tail 30 waha-aqma
+
+
+PERINTAH 3 — Restart CRM supaya .env baru terbaca
+--------------------------------------------------
+bash /root/work/crm-aqma-clinic/scripts/deploy_aqma.sh
+
+Aman diulang: database sudah ada (dilewati), .env sudah ada (tidak ditimpa),
+nginx & SSL dibiarkan. Yang dikerjakan: build + pm2 restart crm-aqma saja.
+
+JANGAN pakai "pm2 restart all" — itu me-restart 12 aplikasi klien lain.
+
+
+SETELAH ITU — scan QR
+----------------------
+1. Buka https://crm.klinikaqma.com
+2. Menu Channel → tambah channel WA QR → beri nama
+3. Scan QR dari WhatsApp klinik:
+   Setelan → Perangkat Tertaut → Tautkan Perangkat
+4. Kirim pesan dari HP lain ke nomor klinik → harus muncul di Inbox
+
+Lalu kabari saya. Saya bisa cek dari sisi server apakah webhook benar-benar
+masuk, tanpa perlu menebak dari tampilan.
+
+
+KALAU MAU DIBATALKAN
+--------------------
+docker stop waha-aqma
+docker rm waha-aqma
+
+Hanya menyentuh container kita. Data sesi tetap di waha-data.
+JANGAN pakai "docker system prune" — itu menghapus volume milik proyek lain.

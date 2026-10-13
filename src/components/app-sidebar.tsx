@@ -30,6 +30,7 @@ import {
   TrendingUp,
   CalendarDays,
   FileBarChart,
+  Stethoscope,
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -65,6 +66,7 @@ const ICONS: Record<string, LucideIcon> = {
   TrendingUp,
   CalendarDays,
   FileBarChart,
+  Stethoscope,
 };
 
 export function AppSidebar({

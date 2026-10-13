@@ -229,6 +229,53 @@ pm2 TIDAK tersentuh (timestamp tetap 9 Okt 13:07).
 
 BELUM: container WAHA belum ada. Butuh operator menjalankan Docker.
 
+## 2026-10-13 — Sesi 8: modul jadwal Slice A (pengaturan klinik)
+
+Operator ACC rancangan, minta lanjut. Dikerjakan Slice A saja: pengaturan.
+Belum ada booking sama sekali — itu Slice B.
+
+Rancangan acuan: docs/rencana-modul-jadwal.md
+
+SCHEMA BARU (semua additive):
+- enum ResourceType: STAFF | ROOM | EQUIPMENT
+- Branch: nama, alamat, telepon, timezone, openingHours (Json 7 hari,
+  index 0 = Minggu — konvensi sengaja disamakan dengan AiSettings.workDays)
+- Resource: satu tabel untuk ruangan, orang, DAN alat. Disatukan karena
+  sifatnya identik (tidak bisa dipakai dua tempat sekaligus); dipisah berarti
+  menulis logika bentrok tiga kali. Punya tags untuk pencocokan keahlian,
+  capacity, workingHours opsional, userId opsional untuk tautan akun CRM.
+- Treatment: durationMinutes, bufferMinutes, price, kategori -> PackageType
+- TreatmentRequirement: treatment butuh berapa sumber daya tipe apa, tag apa
+- PackageVariant ditambah treatmentId + sessionCount (nullable)
+
+KEPUTUSAN PENTING: katalog layanan DISATUKAN. PackageVariant sekarang
+menunjuk ke Treatment, tidak menyalin namanya. Kalau dibiarkan terpisah,
+klinik akan punya dua daftar layanan (jualan vs operasional) yang cepat atau
+lambat isinya beda dan membuat laporan tidak bisa dipertanggungjawabkan.
+
+API: /api/klinik/branches, /resources, /treatments (+ [id] untuk PATCH/DELETE).
+Semua lewat guardKlinik() di src/lib/klinik.ts — satu gerbang izin bersama
+(sesi + manage_crm_settings + isReadOnly untuk operasi tulis). Dibuat terpusat
+supaya tidak terulang kasus endpoint merge yang lupa dipasangi izin.
+Validasi pakai zod, pesan error diterjemahkan ke bahasa manusia.
+
+DELETE sengaja menolak, bukan diam-diam menghapus:
+- Cabang yang masih punya sumber daya -> 409, sarankan nonaktifkan
+- Treatment yang dipakai paket penjualan -> 409, sarankan nonaktifkan
+
+UI: menu baru "Pengaturan Klinik" (/klinik), 3 tab: Cabang, Sumber Daya,
+Treatment. Pakai palet Aqma, bukan warna bawaan Taiba.
+
+Build lolos lewat npm run build:check — folder .next yang dilayani pm2 TIDAK
+tersentuh (timestamp tetap 13 Okt 00:21).
+
+PERLU DEPLOY: ada tabel baru, jadi butuh db:push lewat scripts/deploy_aqma.sh.
+Semua additive, tidak ada kolom dihapus atau diubah tipenya.
+
+BERIKUTNYA (belum dikerjakan): Slice B booking inti + pencegahan bentrok,
+Slice C tombol buat jadwal dari Inbox, Slice D paket & sesi,
+Slice E auto follow-up (docs/rencana-auto-followup.md).
+
 MASIH PERLU DIKONFIRMASI OPERATOR:
 - Daftar treatment & struktur harga Aqma yang sebenarnya (pemetaan paket sesi
   1x/3x/6x/12x saat ini ASUMSI saya, bukan data asli).

@@ -68,6 +68,7 @@ model User {
   conversationAgents    ConversationAgent[]
   pushSubscriptions     PushSubscription[]
   agentTarget           AgentTarget?
+  resources             Resource[]           @relation("ResourceStaff")
 
   @@map("users")
 }
@@ -152,12 +153,13 @@ model AudienceProfile {
 }
 
 model PackageType {
-  id        String           @id @default(cuid())
-  name      String
-  order     Int              @default(0)
-  createdAt DateTime         @default(now())
-  variants  PackageVariant[]
-  customers Customer[]
+  id         String           @id @default(cuid())
+  name       String
+  order      Int              @default(0)
+  createdAt  DateTime         @default(now())
+  variants   PackageVariant[]
+  customers  Customer[]
+  treatments Treatment[]
 
   @@map("package_types")
 }
@@ -171,6 +173,14 @@ model PackageVariant {
   prices        PackagePrice[]
   customers     Customer[]
 
+  // Paket menunjuk ke treatment di katalog, bukan menyalin namanya.
+  // Tanpa ini klinik akan punya dua daftar layanan — satu untuk jualan, satu
+  // untuk operasional — yang cepat atau lambat isinya berbeda dan membuat
+  // laporan tidak bisa dipertanggungjawabkan.
+  treatmentId   String?
+  treatment     Treatment?     @relation(fields: [treatmentId], references: [id], onDelete: SetNull)
+  sessionCount  Int?           // "Paket Laser 6x" -> 6
+
   @@map("package_variants")
 }
 
@@ -183,6 +193,97 @@ model PackagePrice {
 
   @@unique([packageVariantId, sessionPack])
   @@map("package_prices")
+}
+
+// ============================================================================
+// MODUL JADWAL — Slice A: pengaturan klinik
+// Rancangan lengkap: docs/rencana-modul-jadwal.md
+// ============================================================================
+
+// Ruangan, orang, dan alat diperlakukan sama karena sifatnya identik:
+// tidak bisa dipakai dua tempat pada waktu yang sama. Dipisah jadi tiga tabel
+// berarti menulis logika bentrok tiga kali.
+enum ResourceType {
+  STAFF     // dokter / terapis
+  ROOM      // ruang tindakan
+  EQUIPMENT // alat yang jumlahnya terbatas, mis. mesin laser
+}
+
+model Branch {
+  id       String  @id @default(cuid())
+  name     String
+  address  String?
+  phone    String?
+  timezone String  @default("Asia/Jakarta")
+  // [{open: bool, start: "09:00", end: "19:00"} x7], index 0 = Minggu.
+  // Konvensinya sengaja disamakan dengan AiSettings.workDays.
+  openingHours Json?
+  isActive  Boolean  @default(true)
+  order     Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  resources Resource[]
+
+  @@map("branches")
+}
+
+model Resource {
+  id       String       @id @default(cuid())
+  branchId String
+  branch   Branch       @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  name     String
+  type     ResourceType
+  // Kalau STAFF dan orangnya punya akun CRM
+  userId   String?
+  user     User?        @relation("ResourceStaff", fields: [userId], references: [id], onDelete: SetNull)
+  // Untuk mencocokkan keahlian/kemampuan, mis. ["laser", "injeksi"]
+  tags     String[]     @default([])
+  capacity Int          @default(1)
+  // Kosong = ikut jam operasional cabang
+  workingHours Json?
+  isActive  Boolean  @default(true)
+  order     Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([branchId, type])
+  @@index([isActive])
+  @@map("resources")
+}
+
+model Treatment {
+  id              String       @id @default(cuid())
+  name            String
+  categoryId      String?
+  category        PackageType? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  durationMinutes Int          // lama tindakan
+  bufferMinutes   Int          @default(0) // bersih-bersih / siap-siap setelahnya
+  price           Int?         // Rupiah, harga satuan
+  note            String?
+  isActive        Boolean      @default(true)
+  order           Int          @default(0)
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  requirements    TreatmentRequirement[]
+  packageVariants PackageVariant[]
+
+  @@index([isActive])
+  @@map("treatments")
+}
+
+// "Laser CO2 butuh 1 ruangan + 1 terapis bertag laser + 1 unit mesin laser"
+model TreatmentRequirement {
+  id           String       @id @default(cuid())
+  treatmentId  String
+  treatment    Treatment    @relation(fields: [treatmentId], references: [id], onDelete: Cascade)
+  resourceType ResourceType
+  tag          String?      // kosong = sumber daya mana saja yang bertipe itu
+  quantity     Int          @default(1)
+
+  @@index([treatmentId])
+  @@map("treatment_requirements")
 }
 
 model Conversation {
